@@ -1,0 +1,2 @@
+# ssmver
+Simple semver
