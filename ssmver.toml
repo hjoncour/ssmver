@@ -1,0 +1,14 @@
+version = "0.2.0"
+
+[settings]
+mode = "branch"
+prompt = "never"
+prompt_prefixes = [
+    "feature",
+    "release",
+]
+
+[prefixes]
+feature = "minor"
+fix = "patch"
+release = "major"
