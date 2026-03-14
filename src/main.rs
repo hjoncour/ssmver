@@ -1,19 +1,33 @@
 mod config;
+mod git;
 mod hooks;
+mod targets;
 
 use std::{
-    env, fs,
+    env,
+    fs::{self, OpenOptions},
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::Command,
 };
 
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+use semver::Version;
+use serde::{Deserialize, Serialize};
 
-use crate::config::{BumpLevel, SsmverConfig};
-
-const CONFIG_FILE: &str = "ssmver.toml";
-const SSMVER_DIR: &str = ".ssmver";
+use crate::{
+    config::{compute_next_version, BumpLevel, PromptMode, SsmverConfig},
+    git::{
+        ensure_gitignore_has_ssmver, find_main_ref, git_repo_root, log_subjects_since, merge_base,
+        project_root_with_config, remove_ssmver_from_gitignore, run_git, set_hooks_path,
+        show_file_at_rev, unset_hooks_path, CONFIG_FILE, SSMVER_DIR,
+    },
+    targets::{
+        apply_version_to_targets, blocking_targets, discover_targets, extract_commit_prefix,
+        format_target_table, infer_seed_version, VersionTarget,
+    },
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -29,6 +43,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Init,
+    Update,
     Prefix {
         #[command(subcommand)]
         command: PrefixCommands,
@@ -41,7 +56,16 @@ enum Commands {
         key: String,
         value: Option<String>,
     },
+    Targets {
+        #[command(subcommand)]
+        command: TargetsCommands,
+    },
     Uninstall,
+    #[command(hide = true)]
+    Hook {
+        #[command(subcommand)]
+        command: HookCommands,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -51,56 +75,100 @@ enum PrefixCommands {
     List,
 }
 
+#[derive(Debug, Subcommand)]
+enum TargetsCommands {
+    List(TargetListArgs),
+}
+
+#[derive(Debug, Args)]
+struct TargetListArgs {
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+enum HookCommands {
+    PrepareCommitMsg {
+        message_file: PathBuf,
+        source: Option<String>,
+        commit_sha: Option<String>,
+    },
+    PostCommit,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PendingSync {
+    files: Vec<PathBuf>,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command.unwrap_or(Commands::Init) {
         Commands::Init => handle_init(),
+        Commands::Update => handle_update(),
         Commands::Prefix { command } => handle_prefix(command),
         Commands::Bump { level } => handle_bump(level),
         Commands::Version => handle_version(),
         Commands::Config { key, value } => handle_config(&key, value.as_deref()),
+        Commands::Targets { command } => handle_targets(command),
         Commands::Uninstall => handle_uninstall(),
+        Commands::Hook { command } => handle_hook(command),
     }
 }
 
 fn handle_init() -> Result<()> {
     let repo_root = git_repo_root()?;
-    let install_root = repo_root.join(SSMVER_DIR);
-    let hooks_dir = install_root.join("hooks");
-    let scripts_dir = install_root.join("scripts");
     let config_path = repo_root.join(CONFIG_FILE);
 
-    let mut summary = Vec::new();
-
-    fs::create_dir_all(&hooks_dir)
-        .with_context(|| format!("failed to create {}", hooks_dir.display()))?;
-    fs::create_dir_all(&scripts_dir)
-        .with_context(|| format!("failed to create {}", scripts_dir.display()))?;
-    summary.push(format!("Ensured {}", install_root.display()));
-
-    write_executable(
-        &hooks_dir.join("prepare-commit-msg"),
-        hooks::PREPARE_COMMIT_MSG,
-    )?;
-    write_executable(&hooks_dir.join("post-commit"), hooks::POST_COMMIT)?;
-    write_executable(&scripts_dir.join("bump_version.sh"), hooks::BUMP_VERSION)?;
-    summary.push("Generated hooks and scripts".to_string());
-
-    set_hooks_path(&repo_root)?;
-    summary.push("Set git core.hooksPath to .ssmver/hooks".to_string());
-
-    if ensure_gitignore_has_ssmver(&repo_root)? {
-        summary.push("Updated .gitignore with .ssmver/".to_string());
-    } else {
-        summary.push(".gitignore already ignored .ssmver/".to_string());
-    }
+    let mut summary = install_or_refresh_repo(&repo_root)?;
 
     if config_path.exists() {
         summary.push("Preserved existing ssmver.toml".to_string());
     } else {
-        SsmverConfig::default().save(&config_path)?;
-        summary.push("Created default ssmver.toml".to_string());
+        let detected_targets = discover_targets(&repo_root, &SsmverConfig::default().sync)?;
+        ensure_syncable_targets(&detected_targets)?;
+        let initial_version =
+            infer_seed_version(&detected_targets)?.unwrap_or_else(|| Version::new(0, 1, 0));
+        let mut config = SsmverConfig::default();
+        config.version = initial_version.clone();
+        config.save(&config_path)?;
+        summary.push(format!(
+            "Created ssmver.toml at version {}",
+            initial_version
+        ));
+    }
+
+    for line in summary {
+        println!("{line}");
+    }
+
+    Ok(())
+}
+
+fn handle_update() -> Result<()> {
+    let repo_root = project_root_with_config()?;
+    let config_path = repo_root.join(CONFIG_FILE);
+    let mut config = SsmverConfig::load(&config_path)?;
+    let current_version = config.version.clone();
+
+    let mut summary = install_or_refresh_repo(&repo_root)?;
+    let changed_files = sync_project_version(
+        &repo_root,
+        &config_path,
+        &mut config,
+        current_version,
+        false,
+    )?;
+
+    if changed_files.is_empty() {
+        summary.push("Versioned files were already in sync".to_string());
+    } else {
+        summary.push(format!(
+            "Re-synced {} file(s) to version {}",
+            changed_files.len(),
+            config.version
+        ));
     }
 
     for line in summary {
@@ -143,11 +211,12 @@ fn handle_prefix(command: PrefixCommands) -> Result<()> {
 }
 
 fn handle_bump(level: BumpLevel) -> Result<()> {
-    let root = project_root_with_config()?;
-    let config_path = root.join(CONFIG_FILE);
+    let repo_root = project_root_with_config()?;
+    let config_path = repo_root.join(CONFIG_FILE);
     let mut config = SsmverConfig::load(&config_path)?;
-    let (before, after) = config.bump_version(level);
-    config.save(&config_path)?;
+    let before = config.version.clone();
+    let after = compute_next_version(&before, level);
+    sync_project_version(&repo_root, &config_path, &mut config, after.clone(), false)?;
     println!("{before} -> {after}");
     Ok(())
 }
@@ -160,19 +229,55 @@ fn handle_version() -> Result<()> {
 }
 
 fn handle_config(key: &str, value: Option<&str>) -> Result<()> {
-    let root = project_root_with_config()?;
-    let config_path = root.join(CONFIG_FILE);
+    let repo_root = project_root_with_config()?;
+    let config_path = repo_root.join(CONFIG_FILE);
     let mut config = SsmverConfig::load(&config_path)?;
 
     match value {
         Some(raw_value) => {
-            let message = config.set_config_value(key, raw_value)?;
-            config.save(&config_path)?;
-            println!("{message}");
+            if key == "version" || key == "settings.version" {
+                let new_version: Version = raw_value.parse()?;
+                sync_project_version(
+                    &repo_root,
+                    &config_path,
+                    &mut config,
+                    new_version.clone(),
+                    false,
+                )?;
+                println!("Set version = \"{}\"", new_version);
+            } else {
+                let message = config.set_config_value(key, raw_value)?;
+                config.save(&config_path)?;
+                println!("{message}");
+            }
         }
         None => {
             let current_value = config.get_config_value(key)?;
             println!("{current_value}");
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_targets(command: TargetsCommands) -> Result<()> {
+    match command {
+        TargetsCommands::List(args) => {
+            let repo_root = git_repo_root()?;
+            let config = repo_root
+                .join(CONFIG_FILE)
+                .is_file()
+                .then(|| SsmverConfig::load(&repo_root.join(CONFIG_FILE)))
+                .transpose()?
+                .unwrap_or_default();
+            let targets = discover_targets(&repo_root, &config.sync)?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&targets)?);
+            } else if targets.is_empty() {
+                println!("No supported version targets found");
+            } else {
+                println!("{}", format_target_table(&targets));
+            }
         }
     }
 
@@ -210,36 +315,337 @@ fn handle_uninstall() -> Result<()> {
     Ok(())
 }
 
-fn project_root_with_config() -> Result<PathBuf> {
-    let cwd = env::current_dir().context("failed to read current directory")?;
-
-    for ancestor in cwd.ancestors() {
-        if ancestor.join(CONFIG_FILE).is_file() {
-            return Ok(ancestor.to_path_buf());
-        }
+fn handle_hook(command: HookCommands) -> Result<()> {
+    match command {
+        HookCommands::PrepareCommitMsg {
+            message_file,
+            source,
+            commit_sha: _,
+        } => handle_hook_prepare_commit_msg(&message_file, source.as_deref()),
+        HookCommands::PostCommit => handle_hook_post_commit(),
     }
-
-    if let Ok(repo_root) = git_repo_root() {
-        if repo_root.join(CONFIG_FILE).is_file() {
-            return Ok(repo_root);
-        }
-    }
-
-    bail!("Could not find ssmver.toml. Run `ssmver init` first.")
 }
 
-fn git_repo_root() -> Result<PathBuf> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .context("failed to run `git rev-parse --show-toplevel`")?;
+fn handle_hook_prepare_commit_msg(message_file: &Path, source: Option<&str>) -> Result<()> {
+    clear_pending_sync_if_present()?;
 
-    if !output.status.success() {
-        bail!("ssmver must be run inside a git repository");
+    if env::var("SSMVER_AMENDING").ok().as_deref() == Some("1") {
+        return Ok(());
     }
 
-    let root = String::from_utf8(output.stdout).context("git output was not valid UTF-8")?;
-    Ok(PathBuf::from(root.trim()))
+    if matches!(source, Some("merge" | "squash" | "commit")) {
+        return Ok(());
+    }
+
+    let repo_root = match git_repo_root() {
+        Ok(root) => root,
+        Err(_) => return Ok(()),
+    };
+    let config_path = repo_root.join(CONFIG_FILE);
+    if !config_path.exists() {
+        return Ok(());
+    }
+
+    let mut config = SsmverConfig::load(&config_path)?;
+    let first_line = fs::read_to_string(message_file)
+        .ok()
+        .and_then(|content| content.lines().next().map(ToString::to_string))
+        .unwrap_or_default();
+    let Some(prefix) = extract_commit_prefix(&first_line) else {
+        return Ok(());
+    };
+    let Some(level) = config.prefixes.get(&prefix).copied() else {
+        return Ok(());
+    };
+
+    let Some(next_version) = compute_commit_bump_version(&repo_root, &config, level)? else {
+        return Ok(());
+    };
+    sync_project_version(&repo_root, &config_path, &mut config, next_version, true)?;
+
+    if should_prompt_for_body(&config, &prefix) && !commit_message_has_body(message_file)? {
+        prompt_for_commit_body(message_file, &prefix)?;
+    }
+
+    Ok(())
+}
+
+fn handle_hook_post_commit() -> Result<()> {
+    if env::var("SSMVER_AMENDING").ok().as_deref() == Some("1") {
+        return Ok(());
+    }
+
+    let repo_root = match git_repo_root() {
+        Ok(root) => root,
+        Err(_) => return Ok(()),
+    };
+
+    let Some(pending) = read_pending_sync(&repo_root)? else {
+        return Ok(());
+    };
+    if pending.files.is_empty() {
+        clear_pending_sync(&repo_root)?;
+        return Ok(());
+    }
+
+    for file in &pending.files {
+        run_git(
+            &repo_root,
+            [
+                "add".to_string(),
+                "--".to_string(),
+                file.to_string_lossy().into_owned(),
+            ],
+        )?;
+    }
+
+    if !has_cached_changes_for_paths(&repo_root, &pending.files)? {
+        clear_pending_sync(&repo_root)?;
+        return Ok(());
+    }
+
+    let status = Command::new("git")
+        .args(["commit", "--amend", "--no-edit"])
+        .current_dir(&repo_root)
+        .env("SSMVER_AMENDING", "1")
+        .status()
+        .context("failed to amend commit with synchronized version files")?;
+
+    if !status.success() {
+        bail!("git commit --amend --no-edit failed");
+    }
+
+    clear_pending_sync(&repo_root)?;
+    Ok(())
+}
+
+fn sync_project_version(
+    repo_root: &Path,
+    config_path: &Path,
+    config: &mut SsmverConfig,
+    new_version: Version,
+    persist_pending: bool,
+) -> Result<Vec<PathBuf>> {
+    let targets = discover_targets(repo_root, &config.sync)?;
+    ensure_syncable_targets(&targets)?;
+
+    let config_changed = config.version != new_version;
+    if config_changed {
+        config.version = new_version;
+        config.save(config_path)?;
+    }
+
+    let mut changed_files = apply_version_to_targets(repo_root, &targets, &config.version)?;
+    if config_changed {
+        changed_files.push(PathBuf::from(CONFIG_FILE));
+    }
+    changed_files.sort();
+    changed_files.dedup();
+
+    if persist_pending {
+        write_pending_sync(repo_root, &changed_files)?;
+    }
+
+    Ok(changed_files)
+}
+
+fn install_or_refresh_repo(repo_root: &Path) -> Result<Vec<String>> {
+    let install_root = repo_root.join(SSMVER_DIR);
+    let hooks_dir = install_root.join("hooks");
+    let binary_path = env::current_exe()
+        .context("failed to resolve current ssmver binary path")?
+        .canonicalize()
+        .context("failed to canonicalize current ssmver binary path")?;
+
+    let mut summary = Vec::new();
+    fs::create_dir_all(&hooks_dir)
+        .with_context(|| format!("failed to create {}", hooks_dir.display()))?;
+    summary.push(format!("Ensured {}", install_root.display()));
+
+    write_executable(
+        &hooks_dir.join("prepare-commit-msg"),
+        &hooks::prepare_commit_msg_script(&binary_path),
+    )?;
+    write_executable(
+        &hooks_dir.join("post-commit"),
+        &hooks::post_commit_script(&binary_path),
+    )?;
+    summary.push("Generated hook wrappers".to_string());
+
+    set_hooks_path(repo_root)?;
+    summary.push("Set git core.hooksPath to .ssmver/hooks".to_string());
+
+    if ensure_gitignore_has_ssmver(repo_root)? {
+        summary.push("Updated .gitignore with .ssmver/".to_string());
+    } else {
+        summary.push(".gitignore already ignored .ssmver/".to_string());
+    }
+
+    Ok(summary)
+}
+
+fn compute_commit_bump_version(
+    repo_root: &Path,
+    config: &SsmverConfig,
+    level: BumpLevel,
+) -> Result<Option<Version>> {
+    match config.settings.mode {
+        config::Mode::All => Ok(Some(compute_next_version(&config.version, level))),
+        config::Mode::Branch => {
+            let Some(main_ref) = find_main_ref(repo_root)? else {
+                return Ok(Some(compute_next_version(&config.version, level)));
+            };
+            let Some(base) = merge_base(repo_root, &main_ref)? else {
+                return Ok(Some(compute_next_version(&config.version, level)));
+            };
+            let subjects = log_subjects_since(repo_root, &format!("{base}..HEAD"))?;
+            let highest = highest_prefix_bump(config, &subjects);
+            if highest.is_some_and(|existing| bump_priority(level) <= bump_priority(existing)) {
+                return Ok(None);
+            }
+
+            let base_version = show_file_at_rev(repo_root, &base, Path::new(CONFIG_FILE))?
+                .and_then(|content| {
+                    SsmverConfig::from_str(&content)
+                        .ok()
+                        .map(|config| config.version)
+                })
+                .unwrap_or_else(|| config.version.clone());
+            Ok(Some(compute_next_version(&base_version, level)))
+        }
+    }
+}
+
+fn highest_prefix_bump(config: &SsmverConfig, subjects: &[String]) -> Option<BumpLevel> {
+    subjects
+        .iter()
+        .filter_map(|subject| extract_commit_prefix(subject))
+        .filter_map(|prefix| config.prefixes.get(&prefix).copied())
+        .max_by_key(|level| bump_priority(*level))
+}
+
+fn bump_priority(level: BumpLevel) -> u8 {
+    match level {
+        BumpLevel::Patch => 1,
+        BumpLevel::Minor => 2,
+        BumpLevel::Major => 3,
+    }
+}
+
+fn should_prompt_for_body(config: &SsmverConfig, prefix: &str) -> bool {
+    match config.settings.prompt {
+        PromptMode::Never => false,
+        PromptMode::Always => true,
+        PromptMode::Ask => config
+            .settings
+            .prompt_prefixes
+            .iter()
+            .any(|candidate| candidate == prefix),
+    }
+}
+
+fn commit_message_has_body(message_file: &Path) -> Result<bool> {
+    let content = fs::read_to_string(message_file)?;
+    Ok(content.lines().skip(1).any(|line| !line.trim().is_empty()))
+}
+
+fn prompt_for_commit_body(message_file: &Path, prefix: &str) -> Result<()> {
+    let mut tty_writer = match OpenOptions::new().write(true).open("/dev/tty") {
+        Ok(tty) => tty,
+        Err(_) => return Ok(()),
+    };
+    let tty_reader = match OpenOptions::new().read(true).open("/dev/tty") {
+        Ok(tty) => tty,
+        Err(_) => return Ok(()),
+    };
+
+    write!(
+        tty_writer,
+        "ssmver description for {prefix} commit (optional): "
+    )?;
+    tty_writer.flush()?;
+
+    let mut line = String::new();
+    let mut reader = BufReader::new(tty_reader);
+    reader.read_line(&mut line)?;
+    let line = line.trim_end();
+    if line.is_empty() {
+        return Ok(());
+    }
+
+    let mut file = OpenOptions::new().append(true).open(message_file)?;
+    writeln!(file)?;
+    writeln!(file, "{line}")?;
+    Ok(())
+}
+
+fn ensure_syncable_targets(targets: &[VersionTarget]) -> Result<()> {
+    let blockers = blocking_targets(targets);
+    if blockers.is_empty() {
+        return Ok(());
+    }
+
+    let mut lines =
+        vec!["Refusing to sync because some supported files are dynamic or invalid:".to_string()];
+    for target in blockers {
+        lines.push(format!(
+            "- {} ({:?}): {}",
+            target.path.display(),
+            target.target_kind,
+            target.detail.as_deref().unwrap_or("unsupported target")
+        ));
+    }
+    bail!(lines.join("\n"))
+}
+
+fn pending_sync_path(repo_root: &Path) -> PathBuf {
+    repo_root.join(SSMVER_DIR).join(hooks::PENDING_SYNC_FILE)
+}
+
+fn write_pending_sync(repo_root: &Path, files: &[PathBuf]) -> Result<()> {
+    fs::create_dir_all(repo_root.join(SSMVER_DIR))?;
+    let pending = PendingSync {
+        files: files.to_vec(),
+    };
+    fs::write(
+        pending_sync_path(repo_root),
+        serde_json::to_vec_pretty(&pending)?,
+    )?;
+    Ok(())
+}
+
+fn read_pending_sync(repo_root: &Path) -> Result<Option<PendingSync>> {
+    let path = pending_sync_path(repo_root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read(&path)?;
+    Ok(Some(serde_json::from_slice(&content)?))
+}
+
+fn clear_pending_sync(repo_root: &Path) -> Result<()> {
+    let path = pending_sync_path(repo_root);
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn clear_pending_sync_if_present() -> Result<()> {
+    if let Ok(repo_root) = git_repo_root() {
+        clear_pending_sync(&repo_root)?;
+    }
+    Ok(())
+}
+
+fn has_cached_changes_for_paths(repo_root: &Path, paths: &[PathBuf]) -> Result<bool> {
+    let mut command = Command::new("git");
+    command.args(["diff", "--cached", "--quiet", "HEAD", "--"]);
+    for path in paths {
+        command.arg(path);
+    }
+    let status = command.current_dir(repo_root).status()?;
+    Ok(!status.success())
 }
 
 fn write_executable(path: &Path, contents: &str) -> Result<()> {
@@ -255,109 +661,6 @@ fn write_executable(path: &Path, contents: &str) -> Result<()> {
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions)
             .with_context(|| format!("failed to chmod {}", path.display()))?;
-    }
-
-    Ok(())
-}
-
-fn ensure_gitignore_has_ssmver(repo_root: &Path) -> Result<bool> {
-    let gitignore_path = repo_root.join(".gitignore");
-    let existing = match fs::read_to_string(&gitignore_path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to read {}", gitignore_path.display()))
-        }
-    };
-
-    if existing
-        .lines()
-        .any(|line| matches_ssmver_ignore(line.trim()))
-    {
-        return Ok(false);
-    }
-
-    let mut updated = existing;
-    if !updated.is_empty() && !updated.ends_with('\n') {
-        updated.push('\n');
-    }
-    updated.push_str(".ssmver/\n");
-
-    fs::write(&gitignore_path, updated)
-        .with_context(|| format!("failed to write {}", gitignore_path.display()))?;
-    Ok(true)
-}
-
-fn remove_ssmver_from_gitignore(repo_root: &Path) -> Result<bool> {
-    let gitignore_path = repo_root.join(".gitignore");
-    let existing = match fs::read_to_string(&gitignore_path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to read {}", gitignore_path.display()))
-        }
-    };
-
-    let lines: Vec<&str> = existing
-        .lines()
-        .filter(|line| !matches_ssmver_ignore(line.trim()))
-        .collect();
-
-    if lines.len() == existing.lines().count() {
-        return Ok(false);
-    }
-
-    let mut rewritten = lines.join("\n");
-    if !rewritten.is_empty() {
-        rewritten.push('\n');
-    }
-
-    fs::write(&gitignore_path, rewritten)
-        .with_context(|| format!("failed to write {}", gitignore_path.display()))?;
-    Ok(true)
-}
-
-fn matches_ssmver_ignore(line: &str) -> bool {
-    matches!(line, ".ssmver" | ".ssmver/")
-}
-
-fn set_hooks_path(repo_root: &Path) -> Result<()> {
-    run_git(repo_root, ["config", "core.hooksPath", ".ssmver/hooks"])?;
-    Ok(())
-}
-
-fn unset_hooks_path(repo_root: &Path) -> Result<()> {
-    let output = Command::new("git")
-        .args(["config", "--unset", "core.hooksPath"])
-        .current_dir(repo_root)
-        .output()
-        .context("failed to run `git config --unset core.hooksPath`")?;
-
-    if output.status.success() || output.status.code() == Some(5) {
-        return Ok(());
-    }
-
-    bail!(
-        "failed to unset core.hooksPath: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    )
-}
-
-fn run_git<const N: usize>(repo_root: &Path, args: [&str; N]) -> Result<()> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repo_root)
-        .output()
-        .with_context(|| format!("failed to run `git {}`", args.join(" ")))?;
-
-    if !output.status.success() {
-        bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
     }
 
     Ok(())

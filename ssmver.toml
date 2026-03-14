@@ -1,4 +1,4 @@
-version = "0.2.0"
+version = "0.3.0"
 
 [settings]
 mode = "branch"
@@ -7,6 +7,11 @@ prompt_prefixes = [
     "feature",
     "release",
 ]
+
+[sync]
+monorepo = "lockstep"
+constants = "curated"
+exclude = []
 
 [prefixes]
 feature = "minor"
