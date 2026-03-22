@@ -58,6 +58,12 @@ exclude = []
 fix = "patch"
 feature = "minor"
 release = "major"
+
+[release]
+enabled = false
+on_bump = []
+match = ""
+skip = ""
 ```
 
 ## Installation
@@ -112,6 +118,67 @@ ssmver config mode all
 ssmver targets list --json
 ssmver uninstall
 ```
+
+## CI / Release workflows
+
+`ssmver` can generate GitHub Actions workflow files that automatically release or publish your project when a version bump is merged to your main branch.
+
+Each command generates a separate workflow in `.github/workflows/`:
+
+```bash
+ssmver release    # GitHub Release (git tag + release page) -> release.yaml
+ssmver package    # GitHub Packages (npm, Maven, NuGet, Ruby) -> package.yaml
+ssmver npm        # Publish to npmjs.com                      -> npm.yaml
+ssmver crates     # Publish to crates.io                      -> crates.yaml
+```
+
+The ecosystem-specific commands validate that the project actually uses that ecosystem before generating. For example, `ssmver npm` requires a `package.json` in the repo, and `ssmver crates` requires a `Cargo.toml`.
+
+The `ssmver package` command supports ecosystems that have a GitHub Packages registry: Node, Maven, Gradle, .NET, and Ruby. It does not support Cargo, Python, or PHP since GitHub Packages has no registry for those.
+
+### Workflow triggers
+
+Generated workflows trigger on push to the detected main branch (whichever of `main` or `master` exists in the repo). They only proceed when the version in `ssmver.toml` changed compared to the previous commit.
+
+### Release conditions
+
+The `[release]` section in `ssmver.toml` controls when workflows actually release:
+
+```toml
+[release]
+enabled = true
+on_bump = []
+match = ""
+skip = ""
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | `false` | Master toggle. Set to `true` automatically on first `ssmver release`/`npm`/`crates`/`package` run. |
+| `on_bump` | `[]` | Bump levels that trigger a release. Empty means every bump (patch, minor, major) triggers a release. Set to `["minor", "major"]` to skip patch-only bumps. |
+| `match` | `""` | Only release when the commit message contains this string. Example: `"[release]"`. |
+| `skip` | `""` | Skip the release when the commit message contains this string. Example: `"[skip-release]"`. |
+
+These conditions compose: all specified conditions must pass for a release to happen.
+
+Change settings with `ssmver config`:
+
+```bash
+ssmver config release.on_bump "minor,major"
+ssmver config release.match "[release]"
+ssmver config release.skip "[skip-release]"
+```
+
+After changing release settings, re-run the workflow command (e.g., `ssmver release`) to regenerate the workflow YAML with the updated filters baked in.
+
+### Secrets
+
+| Command | Required secret |
+|---------|----------------|
+| `ssmver release` | None (uses `GITHUB_TOKEN`) |
+| `ssmver package` | None (uses `GITHUB_TOKEN`) |
+| `ssmver npm` | `NPM_TOKEN` |
+| `ssmver crates` | `CARGO_REGISTRY_TOKEN` |
 
 ## Notes
 

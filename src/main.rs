@@ -2,6 +2,7 @@ mod config;
 mod git;
 mod hooks;
 mod targets;
+mod workflows;
 
 use std::{
     env,
@@ -25,8 +26,9 @@ use crate::{
     },
     targets::{
         apply_version_to_targets, blocking_targets, discover_targets, extract_commit_prefix,
-        format_target_table, infer_seed_version, VersionTarget,
+        format_target_table, infer_seed_version, Ecosystem, TargetStatus, VersionTarget,
     },
+    workflows::{WorkflowKind, GITHUB_PACKAGES_ECOSYSTEMS},
 };
 
 #[derive(Debug, Parser)]
@@ -61,6 +63,14 @@ enum Commands {
         command: TargetsCommands,
     },
     Uninstall,
+    /// Generate a GitHub Actions workflow to create GitHub Releases
+    Release,
+    /// Generate a GitHub Actions workflow to publish to GitHub Packages
+    Package,
+    /// Generate a GitHub Actions workflow to publish to npm
+    Npm,
+    /// Generate a GitHub Actions workflow to publish to crates.io
+    Crates,
     #[command(hide = true)]
     Hook {
         #[command(subcommand)]
@@ -113,6 +123,10 @@ fn main() -> Result<()> {
         Commands::Config { key, value } => handle_config(&key, value.as_deref()),
         Commands::Targets { command } => handle_targets(command),
         Commands::Uninstall => handle_uninstall(),
+        Commands::Release => handle_workflow(WorkflowKind::Release),
+        Commands::Package => handle_workflow(WorkflowKind::Package),
+        Commands::Npm => handle_workflow(WorkflowKind::Npm),
+        Commands::Crates => handle_workflow(WorkflowKind::Crates),
         Commands::Hook { command } => handle_hook(command),
     }
 }
@@ -313,6 +327,87 @@ fn handle_uninstall() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn handle_workflow(kind: WorkflowKind) -> Result<()> {
+    let repo_root = project_root_with_config()?;
+    let config_path = repo_root.join(CONFIG_FILE);
+    let mut config = SsmverConfig::load(&config_path)?;
+    let targets = discover_targets(&repo_root, &config.sync)?;
+
+    let package_ecosystem = match kind {
+        WorkflowKind::Release => None,
+        WorkflowKind::Npm => {
+            require_ecosystem(&targets, Ecosystem::Node, "npm")?;
+            None
+        }
+        WorkflowKind::Crates => {
+            require_ecosystem(&targets, Ecosystem::Cargo, "crates")?;
+            None
+        }
+        WorkflowKind::Package => Some(resolve_package_ecosystem(&targets)?),
+    };
+
+    let main_ref = find_main_ref(&repo_root)?.unwrap_or_else(|| "refs/heads/main".to_string());
+    let branch = workflows::branch_name_from_ref(&main_ref);
+
+    if !config.release.enabled {
+        config.release.enabled = true;
+        config.save(&config_path)?;
+        println!("Enabled [release] in ssmver.toml");
+    }
+
+    let yaml = match kind {
+        WorkflowKind::Release  => workflows::release_workflow(&config.release, branch),
+        WorkflowKind::Npm      => workflows::npm_workflow(&config.release, branch),
+        WorkflowKind::Crates   => workflows::crates_workflow(&config.release, branch),
+        WorkflowKind::Package  => workflows::package_workflow(&config.release, branch, package_ecosystem.unwrap()),
+    };
+
+    let workflows_dir = repo_root.join(".github").join("workflows");
+    fs::create_dir_all(&workflows_dir).context("creating .github/workflows directory")?;
+
+    let file_name = workflows::workflow_file_name(kind);
+    let file_path = workflows_dir.join(file_name);
+    let verb = if file_path.exists() {"Overwrote"} else {"Generated"};
+    fs::write(&file_path, &yaml).with_context(|| format!("writing {}", file_path.display()))?;
+
+    let relative = file_path.strip_prefix(&repo_root).unwrap_or(&file_path);
+    println!("{verb} {}", relative.display());
+
+    match kind {
+        WorkflowKind::Npm => println!("Add NPM_TOKEN to your repository secrets"),
+        WorkflowKind::Crates => println!("Add CARGO_REGISTRY_TOKEN to your repository secrets"),
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn require_ecosystem(targets: &[VersionTarget], ecosystem: Ecosystem, command: &str) -> Result<()> {
+    if !targets.iter().any(|t| t.ecosystem == ecosystem && t.status == TargetStatus::Managed) {
+        bail!("No {ecosystem} targets found. `ssmver {command}` requires a {ecosystem} project.");
+    }
+    Ok(())
+}
+
+fn resolve_package_ecosystem(targets: &[VersionTarget]) -> Result<Ecosystem> {
+    let supported: Vec<Ecosystem> = GITHUB_PACKAGES_ECOSYSTEMS.iter().copied().filter(|eco| targets.iter().any(|t| t.ecosystem == *eco && t.status == TargetStatus::Managed)).collect();
+    if supported.is_empty() {
+        let names: Vec<&str> = GITHUB_PACKAGES_ECOSYSTEMS.iter().map(|e| match e {
+            Ecosystem::Node   => "Node",
+            Ecosystem::Maven  => "Maven",
+            Ecosystem::Gradle => "Gradle",
+            Ecosystem::Dotnet => ".NET",
+            Ecosystem::Ruby   => "Ruby",
+            _                 => "unknown",
+        }).collect();
+        bail!("No ecosystem supporting GitHub Packages found. Supported: {}", names.join(", "));
+    }
+    if supported.len() > 1 {
+        println!("Multiple ecosystems support GitHub Packages: {}. Using {}.", supported.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", "), supported[0]);
+    }
+    Ok(supported[0])
 }
 
 fn handle_hook(command: HookCommands) -> Result<()> {

@@ -1,0 +1,56 @@
+name: ssmver-release
+
+on:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Evaluate release conditions
+        id: check
+        run: |
+          VERSION=$(grep '^version' ssmver.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # Determine bump type by comparing with previous commit
+          PREV_VERSION=$(git show HEAD~1:ssmver.toml 2>/dev/null | grep '^version' | head -1 | sed 's/.*"\(.*\)"/\1/' || echo "")
+          if [ -z "$PREV_VERSION" ] || [ "$PREV_VERSION" = "$VERSION" ]; then
+            echo "No version change detected"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CUR_MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          CUR_MINOR=$(echo "$VERSION" | cut -d. -f2)
+          CUR_PATCH=$(echo "$VERSION" | cut -d. -f3)
+          PRV_MAJOR=$(echo "$PREV_VERSION" | cut -d. -f1)
+          PRV_MINOR=$(echo "$PREV_VERSION" | cut -d. -f2)
+
+          if [ "$CUR_MAJOR" != "$PRV_MAJOR" ]; then
+            BUMP_TYPE="major"
+          elif [ "$CUR_MINOR" != "$PRV_MINOR" ]; then
+            BUMP_TYPE="minor"
+          else
+            BUMP_TYPE="patch"
+          fi
+          echo "bump_type=$BUMP_TYPE" >> "$GITHUB_OUTPUT"
+
+
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.check.outputs.version }}
+          name: v${{ steps.check.outputs.version }}
+          generate_release_notes: true

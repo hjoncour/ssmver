@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     ffi::OsStr,
+    fmt,
     fs,
     path::{Component, Path, PathBuf},
 };
@@ -76,6 +77,22 @@ pub enum Ecosystem {
     Dotnet,
     Ruby,
     Php,
+}
+
+impl fmt::Display for Ecosystem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Cargo  => "Cargo",
+            Self::Node   => "Node",
+            Self::Maven  => "Maven",
+            Self::Gradle => "Gradle",
+            Self::Python => "Python",
+            Self::Dotnet => ".NET",
+            Self::Ruby   => "Ruby",
+            Self::Php    => "PHP",
+        };
+        f.write_str(label)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
