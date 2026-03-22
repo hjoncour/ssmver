@@ -11,20 +11,20 @@ pub enum WorkflowKind {
 
 pub fn workflow_file_name(kind: WorkflowKind) -> &'static str {
     match kind {
-        WorkflowKind::Release => "ssmver-release.yml",
-        WorkflowKind::Package => "ssmver-package.yml",
-        WorkflowKind::Npm     => "ssmver-npm.yml",
-        WorkflowKind::Crates  => "ssmver-crates.yml",
+        WorkflowKind::Release => "release.yaml",
+        WorkflowKind::Package => "package.yaml",
+        WorkflowKind::Npm     => "npm.yaml",
+        WorkflowKind::Crates  => "crates.yaml",
     }
 }
 
-pub fn release_workflow(config: &ReleaseConfig) -> String {
+pub fn release_workflow(config: &ReleaseConfig, branch: &str) -> String {
     let trigger_step = trigger_evaluation_step(config);
-    r#"name: ssmver-release
+    r#"name: release
 
 on:
   push:
-    branches: [main, master]
+    branches: [__BRANCH__]
 
 permissions:
   contents: write
@@ -46,16 +46,16 @@ __TRIGGER_STEP__
           tag_name: v${{ steps.check.outputs.version }}
           name: v${{ steps.check.outputs.version }}
           generate_release_notes: true
-"#.replace("__TRIGGER_STEP__", &trigger_step)
+"#.replace("__BRANCH__", branch).replace("__TRIGGER_STEP__", &trigger_step)
 }
 
-pub fn npm_workflow(config: &ReleaseConfig) -> String {
+pub fn npm_workflow(config: &ReleaseConfig, branch: &str) -> String {
     let trigger_step = trigger_evaluation_step(config);
-    r#"name: ssmver-npm
+    r#"name: npm
 
 on:
   push:
-    branches: [main, master]
+    branches: [__BRANCH__]
 
 permissions:
   contents: read
@@ -85,16 +85,16 @@ __TRIGGER_STEP__
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-"#.replace("__TRIGGER_STEP__", &trigger_step)
+"#.replace("__BRANCH__", branch).replace("__TRIGGER_STEP__", &trigger_step)
 }
 
-pub fn crates_workflow(config: &ReleaseConfig) -> String {
+pub fn crates_workflow(config: &ReleaseConfig, branch: &str) -> String {
     let trigger_step = trigger_evaluation_step(config);
-    r#"name: ssmver-crates
+    r#"name: crates
 
 on:
   push:
-    branches: [main, master]
+    branches: [__BRANCH__]
 
 permissions:
   contents: read
@@ -117,10 +117,10 @@ __TRIGGER_STEP__
         run: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-"#.replace("__TRIGGER_STEP__", &trigger_step)
+"#.replace("__BRANCH__", branch).replace("__TRIGGER_STEP__", &trigger_step)
 }
 
-pub fn package_workflow(config: &ReleaseConfig, ecosystem: Ecosystem) -> String {
+pub fn package_workflow(config: &ReleaseConfig, branch: &str, ecosystem: Ecosystem) -> String {
     let trigger_step = trigger_evaluation_step(config);
     let publish_steps = match ecosystem {
         Ecosystem::Node => r#"      - uses: actions/setup-node@v4
@@ -188,11 +188,11 @@ pub fn package_workflow(config: &ReleaseConfig, ecosystem: Ecosystem) -> String 
         _ => "",
     };
 
-    let template = r#"name: ssmver-package
+    let template = r#"name: package
 
 on:
   push:
-    branches: [main, master]
+    branches: [__BRANCH__]
 
 permissions:
   contents: read
@@ -212,6 +212,7 @@ __PUBLISH_STEPS__
 "#;
 
     template
+        .replace("__BRANCH__", branch)
         .replace("__TRIGGER_STEP__", &trigger_step)
         .replace("__PUBLISH_STEPS__", publish_steps)
 }
@@ -318,25 +319,38 @@ pub const GITHUB_PACKAGES_ECOSYSTEMS: &[Ecosystem] = &[
     Ecosystem::Ruby,
 ];
 
+/// Extracts the branch name from a `find_main_ref` result like `refs/heads/main`.
+pub fn branch_name_from_ref(reference: &str) -> &str {
+    reference.strip_prefix("refs/heads/").or_else(|| reference.strip_prefix("refs/remotes/origin/")).unwrap_or(reference)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_workflow_file_names() {
-        assert_eq!(workflow_file_name(WorkflowKind::Release), "ssmver-release.yml");
-        assert_eq!(workflow_file_name(WorkflowKind::Package), "ssmver-package.yml");
-        assert_eq!(workflow_file_name(WorkflowKind::Npm), "ssmver-npm.yml");
-        assert_eq!(workflow_file_name(WorkflowKind::Crates), "ssmver-crates.yml");
+        assert_eq!(workflow_file_name(WorkflowKind::Release), "release.yaml");
+        assert_eq!(workflow_file_name(WorkflowKind::Package), "package.yaml");
+        assert_eq!(workflow_file_name(WorkflowKind::Npm), "npm.yaml");
+        assert_eq!(workflow_file_name(WorkflowKind::Crates), "crates.yaml");
     }
 
     #[test]
     fn test_release_workflow_contains_trigger_step() {
         let config = ReleaseConfig::default();
-        let yaml = release_workflow(&config);
+        let yaml = release_workflow(&config, "main");
         assert!(yaml.contains("Evaluate release conditions"));
         assert!(yaml.contains("softprops/action-gh-release@v2"));
-        assert!(yaml.contains("should_release"));
+        assert!(yaml.contains("branches: [main]"));
+    }
+
+    #[test]
+    fn test_release_workflow_uses_master_branch() {
+        let config = ReleaseConfig::default();
+        let yaml = release_workflow(&config, "master");
+        assert!(yaml.contains("branches: [master]"));
+        assert!(!yaml.contains("branches: [main]"));
     }
 
     #[test]
@@ -347,7 +361,7 @@ mod tests {
             r#match: String::new(),
             skip: String::new(),
         };
-        let yaml = release_workflow(&config);
+        let yaml = release_workflow(&config, "main");
         assert!(yaml.contains("ALLOWED_BUMPS=\"minor major\""));
     }
 
@@ -359,7 +373,7 @@ mod tests {
             r#match: "[release]".to_string(),
             skip: String::new(),
         };
-        let yaml = release_workflow(&config);
+        let yaml = release_workflow(&config, "main");
         assert!(yaml.contains("MATCH_PATTERN=\"[release]\""));
     }
 
@@ -371,14 +385,14 @@ mod tests {
             r#match: String::new(),
             skip: "[skip-release]".to_string(),
         };
-        let yaml = release_workflow(&config);
+        let yaml = release_workflow(&config, "main");
         assert!(yaml.contains("SKIP_PATTERN=\"[skip-release]\""));
     }
 
     #[test]
     fn test_npm_workflow_structure() {
         let config = ReleaseConfig::default();
-        let yaml = npm_workflow(&config);
+        let yaml = npm_workflow(&config, "main");
         assert!(yaml.contains("actions/setup-node@v4"));
         assert!(yaml.contains("npm publish"));
         assert!(yaml.contains("NPM_TOKEN"));
@@ -387,7 +401,7 @@ mod tests {
     #[test]
     fn test_crates_workflow_structure() {
         let config = ReleaseConfig::default();
-        let yaml = crates_workflow(&config);
+        let yaml = crates_workflow(&config, "main");
         assert!(yaml.contains("dtolnay/rust-toolchain@stable"));
         assert!(yaml.contains("cargo publish"));
         assert!(yaml.contains("CARGO_REGISTRY_TOKEN"));
@@ -396,7 +410,7 @@ mod tests {
     #[test]
     fn test_package_workflow_node() {
         let config = ReleaseConfig::default();
-        let yaml = package_workflow(&config, Ecosystem::Node);
+        let yaml = package_workflow(&config, "main", Ecosystem::Node);
         assert!(yaml.contains("npm.pkg.github.com"));
         assert!(yaml.contains("packages: write"));
     }
@@ -404,8 +418,16 @@ mod tests {
     #[test]
     fn test_package_workflow_dotnet() {
         let config = ReleaseConfig::default();
-        let yaml = package_workflow(&config, Ecosystem::Dotnet);
+        let yaml = package_workflow(&config, "main", Ecosystem::Dotnet);
         assert!(yaml.contains("nuget.pkg.github.com"));
         assert!(yaml.contains("dotnet pack"));
+    }
+
+    #[test]
+    fn test_branch_name_from_ref() {
+        assert_eq!(branch_name_from_ref("refs/heads/main"), "main");
+        assert_eq!(branch_name_from_ref("refs/heads/master"), "master");
+        assert_eq!(branch_name_from_ref("refs/remotes/origin/main"), "main");
+        assert_eq!(branch_name_from_ref("develop"), "develop");
     }
 }

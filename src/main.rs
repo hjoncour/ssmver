@@ -348,6 +348,9 @@ fn handle_workflow(kind: WorkflowKind) -> Result<()> {
         WorkflowKind::Package => Some(resolve_package_ecosystem(&targets)?),
     };
 
+    let main_ref = find_main_ref(&repo_root)?.unwrap_or_else(|| "refs/heads/main".to_string());
+    let branch = workflows::branch_name_from_ref(&main_ref);
+
     if !config.release.enabled {
         config.release.enabled = true;
         config.save(&config_path)?;
@@ -355,10 +358,10 @@ fn handle_workflow(kind: WorkflowKind) -> Result<()> {
     }
 
     let yaml = match kind {
-        WorkflowKind::Release  => workflows::release_workflow(&config.release),
-        WorkflowKind::Npm      => workflows::npm_workflow(&config.release),
-        WorkflowKind::Crates   => workflows::crates_workflow(&config.release),
-        WorkflowKind::Package  => workflows::package_workflow(&config.release, package_ecosystem.unwrap()),
+        WorkflowKind::Release  => workflows::release_workflow(&config.release, branch),
+        WorkflowKind::Npm      => workflows::npm_workflow(&config.release, branch),
+        WorkflowKind::Crates   => workflows::crates_workflow(&config.release, branch),
+        WorkflowKind::Package  => workflows::package_workflow(&config.release, branch, package_ecosystem.unwrap()),
     };
 
     let workflows_dir = repo_root.join(".github").join("workflows");

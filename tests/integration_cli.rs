@@ -322,9 +322,9 @@ fn release_generates_workflow_for_any_project() {
 
     assert_success(run_ssmver(temp.path(), &["init"]));
     let output = assert_success(run_ssmver(temp.path(), &["release"]));
-    assert!(output.contains("Generated .github/workflows/ssmver-release.yml"));
+    assert!(output.contains("Generated .github/workflows/release.yaml"));
 
-    let workflow = fs::read_to_string(temp.path().join(".github/workflows/ssmver-release.yml")).unwrap();
+    let workflow = fs::read_to_string(temp.path().join(".github/workflows/release.yaml")).unwrap();
     assert!(workflow.contains("softprops/action-gh-release@v2"));
     assert!(workflow.contains("Evaluate release conditions"));
 
@@ -346,10 +346,10 @@ fn crates_generates_workflow_with_cargo_project() {
 
     assert_success(run_ssmver(temp.path(), &["init"]));
     let output = assert_success(run_ssmver(temp.path(), &["crates"]));
-    assert!(output.contains("Generated .github/workflows/ssmver-crates.yml"));
+    assert!(output.contains("Generated .github/workflows/crates.yaml"));
     assert!(output.contains("CARGO_REGISTRY_TOKEN"));
 
-    let workflow = fs::read_to_string(temp.path().join(".github/workflows/ssmver-crates.yml")).unwrap();
+    let workflow = fs::read_to_string(temp.path().join(".github/workflows/crates.yaml")).unwrap();
     assert!(workflow.contains("cargo publish"));
 }
 
@@ -380,10 +380,10 @@ fn npm_generates_workflow_with_node_project() {
 
     assert_success(run_ssmver(temp.path(), &["init"]));
     let output = assert_success(run_ssmver(temp.path(), &["npm"]));
-    assert!(output.contains("Generated .github/workflows/ssmver-npm.yml"));
+    assert!(output.contains("Generated .github/workflows/npm.yaml"));
     assert!(output.contains("NPM_TOKEN"));
 
-    let workflow = fs::read_to_string(temp.path().join(".github/workflows/ssmver-npm.yml")).unwrap();
+    let workflow = fs::read_to_string(temp.path().join(".github/workflows/npm.yaml")).unwrap();
     assert!(workflow.contains("npm publish"));
 }
 
@@ -433,9 +433,9 @@ fn package_generates_workflow_for_node_project() {
 
     assert_success(run_ssmver(temp.path(), &["init"]));
     let output = assert_success(run_ssmver(temp.path(), &["package"]));
-    assert!(output.contains("Generated .github/workflows/ssmver-package.yml"));
+    assert!(output.contains("Generated .github/workflows/package.yaml"));
 
-    let workflow = fs::read_to_string(temp.path().join(".github/workflows/ssmver-package.yml")).unwrap();
+    let workflow = fs::read_to_string(temp.path().join(".github/workflows/package.yaml")).unwrap();
     assert!(workflow.contains("npm.pkg.github.com"));
     assert!(workflow.contains("packages: write"));
 }
@@ -456,5 +456,5 @@ fn release_overwrites_existing_workflow() {
     assert_success(run_ssmver(temp.path(), &["release"]));
 
     let output = assert_success(run_ssmver(temp.path(), &["release"]));
-    assert!(output.contains("Overwrote .github/workflows/ssmver-release.yml"));
+    assert!(output.contains("Overwrote .github/workflows/release.yaml"));
 }
