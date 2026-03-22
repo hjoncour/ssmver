@@ -17,3 +17,9 @@ exclude = []
 feature = "minor"
 fix = "patch"
 release = "major"
+
+[release]
+enabled = true
+on_bump = []
+match = ""
+skip = ""
