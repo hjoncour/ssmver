@@ -90,6 +90,18 @@ impl fmt::Display for ConstantsMode {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReleaseConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub on_bump: Vec<BumpLevel>,
+    #[serde(default, rename = "match")]
+    pub r#match: String,
+    #[serde(default)]
+    pub skip: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_mode")]
@@ -140,6 +152,8 @@ pub struct SsmverConfig {
     pub sync: SyncSettings,
     #[serde(default = "default_prefixes")]
     pub prefixes: BTreeMap<String, BumpLevel>,
+    #[serde(default)]
+    pub release: ReleaseConfig,
 }
 
 impl Default for SsmverConfig {
@@ -149,6 +163,7 @@ impl Default for SsmverConfig {
             settings: Settings::default(),
             sync: SyncSettings::default(),
             prefixes: default_prefixes(),
+            release: ReleaseConfig::default(),
         }
     }
 }
@@ -179,6 +194,10 @@ impl SsmverConfig {
             "sync.monorepo" => Ok(self.sync.monorepo.to_string()),
             "sync.constants" => Ok(self.sync.constants.to_string()),
             "sync.exclude" => Ok(self.sync.exclude.join(",")),
+            "release.enabled" => Ok(self.release.enabled.to_string()),
+            "release.on_bump" => Ok(self.release.on_bump.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(",")),
+            "release.match" => Ok(self.release.r#match.clone()),
+            "release.skip" => Ok(self.release.skip.clone()),
             _ => bail!("Unsupported config key: {key}"),
         }
     }
@@ -219,6 +238,23 @@ impl SsmverConfig {
                     render_string_array(&self.sync.exclude)
                 ))
             }
+            "release.enabled" => {
+                self.release.enabled = parse_bool(raw_value)?;
+                Ok(format!("Set release.enabled = {}", self.release.enabled))
+            }
+            "release.on_bump" => {
+                self.release.on_bump = parse_bump_level_list(raw_value)?;
+                let display = self.release.on_bump.iter().map(|l| l.to_string()).collect::<Vec<_>>();
+                Ok(format!("Set release.on_bump = {}", render_string_array(&display)))
+            }
+            "release.match" => {
+                self.release.r#match = raw_value.trim().to_string();
+                Ok(format!("Set release.match = \"{}\"", self.release.r#match))
+            }
+            "release.skip" => {
+                self.release.skip = raw_value.trim().to_string();
+                Ok(format!("Set release.skip = \"{}\"", self.release.skip))
+            }
             _ => bail!("Unsupported config key: {key}"),
         }
     }
@@ -256,6 +292,12 @@ fn normalize_key(key: &str) -> &str {
         "monorepo" => "sync.monorepo",
         "constants" => "sync.constants",
         "exclude" => "sync.exclude",
+        "enabled" => "release.enabled",
+        "on_bump" => "release.on_bump",
+        "release.match" => "release.match",
+        "release.skip" => "release.skip",
+        "release.enabled" => "release.enabled",
+        "release.on_bump" => "release.on_bump",
         other => other,
     }
 }
@@ -282,6 +324,24 @@ fn parse_monorepo_mode(value: &str) -> Result<MonorepoMode> {
         "lockstep" => Ok(MonorepoMode::Lockstep),
         _ => bail!("sync.monorepo must be: lockstep"),
     }
+}
+
+fn parse_bool(value: &str) -> Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" => Ok(true),
+        "false" | "0" | "no" => Ok(false),
+        _ => bail!("value must be true or false"),
+    }
+}
+
+fn parse_bump_level_list(value: &str) -> Result<Vec<BumpLevel>> {
+    let items = parse_string_list(value);
+    items.iter().map(|item| match item.trim().to_ascii_lowercase().as_str() {
+        "patch" => Ok(BumpLevel::Patch),
+        "minor" => Ok(BumpLevel::Minor),
+        "major" => Ok(BumpLevel::Major),
+        other => bail!("unknown bump level: {other} (expected patch, minor, or major)"),
+    }).collect()
 }
 
 fn parse_constants_mode(value: &str) -> Result<ConstantsMode> {

@@ -307,3 +307,154 @@ fn bump_updates_phase_two_supported_files() {
         .unwrap()
         .contains("\"version\": \"1.3.0\""));
 }
+
+#[test]
+fn release_generates_workflow_for_any_project() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    let output = assert_success(run_ssmver(temp.path(), &["release"]));
+    assert!(output.contains("Generated .github/workflows/ssmver-release.yml"));
+
+    let workflow = fs::read_to_string(temp.path().join(".github/workflows/ssmver-release.yml")).unwrap();
+    assert!(workflow.contains("softprops/action-gh-release@v2"));
+    assert!(workflow.contains("Evaluate release conditions"));
+
+    let config = fs::read_to_string(temp.path().join("ssmver.toml")).unwrap();
+    assert!(config.contains("enabled = true"));
+}
+
+#[test]
+fn crates_generates_workflow_with_cargo_project() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    let output = assert_success(run_ssmver(temp.path(), &["crates"]));
+    assert!(output.contains("Generated .github/workflows/ssmver-crates.yml"));
+    assert!(output.contains("CARGO_REGISTRY_TOKEN"));
+
+    let workflow = fs::read_to_string(temp.path().join(".github/workflows/ssmver-crates.yml")).unwrap();
+    assert!(workflow.contains("cargo publish"));
+}
+
+#[test]
+fn crates_fails_without_cargo_project() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("package.json"),
+        "{\n  \"name\": \"demo\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    let output = assert_failure(run_ssmver(temp.path(), &["crates"]));
+    assert!(output.contains("No Cargo targets found"));
+}
+
+#[test]
+fn npm_generates_workflow_with_node_project() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("package.json"),
+        "{\n  \"name\": \"demo\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    let output = assert_success(run_ssmver(temp.path(), &["npm"]));
+    assert!(output.contains("Generated .github/workflows/ssmver-npm.yml"));
+    assert!(output.contains("NPM_TOKEN"));
+
+    let workflow = fs::read_to_string(temp.path().join(".github/workflows/ssmver-npm.yml")).unwrap();
+    assert!(workflow.contains("npm publish"));
+}
+
+#[test]
+fn npm_fails_without_node_project() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    let output = assert_failure(run_ssmver(temp.path(), &["npm"]));
+    assert!(output.contains("No Node targets found"));
+}
+
+#[test]
+fn package_fails_without_supported_ecosystem() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    let output = assert_failure(run_ssmver(temp.path(), &["package"]));
+    assert!(output.contains("No ecosystem supporting GitHub Packages found"));
+}
+
+#[test]
+fn package_generates_workflow_for_node_project() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("package.json"),
+        "{\n  \"name\": \"demo\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    let output = assert_success(run_ssmver(temp.path(), &["package"]));
+    assert!(output.contains("Generated .github/workflows/ssmver-package.yml"));
+
+    let workflow = fs::read_to_string(temp.path().join(".github/workflows/ssmver-package.yml")).unwrap();
+    assert!(workflow.contains("npm.pkg.github.com"));
+    assert!(workflow.contains("packages: write"));
+}
+
+#[test]
+fn release_overwrites_existing_workflow() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    assert_success(run_ssmver(temp.path(), &["release"]));
+
+    let output = assert_success(run_ssmver(temp.path(), &["release"]));
+    assert!(output.contains("Overwrote .github/workflows/ssmver-release.yml"));
+}
