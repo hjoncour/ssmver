@@ -458,3 +458,132 @@ fn release_overwrites_existing_workflow() {
     let output = assert_success(run_ssmver(temp.path(), &["release"]));
     assert!(output.contains("Overwrote .github/workflows/release.yaml"));
 }
+
+#[test]
+fn bump_updates_xcode_marketing_version() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::create_dir_all(temp.path().join("App.xcodeproj")).unwrap();
+    fs::write(
+        temp.path().join("App.xcodeproj/project.pbxproj"),
+        "// !$*UTF8*$!\n{\n\tobjectVersion = 56;\n\tobjects = {\n\t\tBuildConfig1 = {\n\t\t\tbuildSettings = {\n\t\t\t\tMARKETING_VERSION = 2.0.0;\n\t\t\t};\n\t\t};\n\t\tBuildConfig2 = {\n\t\t\tbuildSettings = {\n\t\t\t\tMARKETING_VERSION = 2.0.0;\n\t\t\t};\n\t\t};\n\t};\n}\n",
+    )
+    .unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    let config = fs::read_to_string(temp.path().join("ssmver.toml")).unwrap();
+    assert!(config.contains("version = \"2.0.0\""));
+
+    assert_success(run_ssmver(temp.path(), &["bump", "minor"]));
+
+    let pbxproj = fs::read_to_string(temp.path().join("App.xcodeproj/project.pbxproj")).unwrap();
+    assert!(pbxproj.contains("MARKETING_VERSION = 2.1.0;"));
+    assert!(!pbxproj.contains("MARKETING_VERSION = 2.0.0;"));
+}
+
+#[test]
+fn bump_updates_info_plist_literal_version() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("Info.plist"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>CFBundleShortVersionString</key>\n\t<string>1.0.0</string>\n</dict>\n</plist>\n",
+    )
+    .unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    assert_success(run_ssmver(temp.path(), &["bump", "major"]));
+
+    let plist = fs::read_to_string(temp.path().join("Info.plist")).unwrap();
+    assert!(plist.contains("<string>2.0.0</string>"));
+}
+
+#[test]
+fn info_plist_with_build_variable_is_skipped() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::create_dir_all(temp.path().join("App.xcodeproj")).unwrap();
+    fs::write(
+        temp.path().join("App.xcodeproj/project.pbxproj"),
+        "// pbxproj\n{\n\tBuildConfig = {\n\t\tbuildSettings = {\n\t\t\tMARKETING_VERSION = 1.0.0;\n\t\t};\n\t};\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("Info.plist"),
+        "<?xml version=\"1.0\"?>\n<plist version=\"1.0\">\n<dict>\n\t<key>CFBundleShortVersionString</key>\n\t<string>$(MARKETING_VERSION)</string>\n</dict>\n</plist>\n",
+    )
+    .unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    assert_success(run_ssmver(temp.path(), &["bump", "patch"]));
+
+    let pbxproj = fs::read_to_string(temp.path().join("App.xcodeproj/project.pbxproj")).unwrap();
+    assert!(pbxproj.contains("MARKETING_VERSION = 1.0.1;"));
+
+    let plist = fs::read_to_string(temp.path().join("Info.plist")).unwrap();
+    assert!(plist.contains("$(MARKETING_VERSION)"));
+}
+
+#[test]
+fn status_reports_all_in_sync() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    let output = assert_success(run_ssmver(temp.path(), &["status"]));
+    assert!(output.contains("version: 1.0.0"));
+    assert!(output.contains("1 target(s) in sync"));
+}
+
+#[test]
+fn status_detects_drift() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"9.9.9\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+
+    let output = run_ssmver(temp.path(), &["status"]);
+    assert!(!output.status.success());
+    let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    assert!(text.contains("Out of sync"));
+    assert!(text.contains("9.9.9"));
+    assert!(text.contains("expected 1.0.0"));
+}
+
+#[test]
+fn bare_ssmver_runs_status_when_initialized() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    let output = assert_success(run_ssmver(temp.path(), &[]));
+    assert!(output.contains("version: 1.0.0"));
+    assert!(output.contains("in sync"));
+}

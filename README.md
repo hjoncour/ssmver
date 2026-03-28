@@ -22,6 +22,7 @@ Current support includes:
 - .NET: `*.csproj`, `Directory.Build.props`, curated `AssemblyInfo.cs` version attributes
 - Ruby: `*.gemspec`, curated `lib/**/version.rb`
 - PHP: `composer.json`
+- Swift / Xcode: `MARKETING_VERSION` in `project.pbxproj`, `CFBundleShortVersionString` in `Info.plist`
 
 `ssmver` intentionally does not try to replace arbitrary version strings in docs, source comments, changelogs, or dependency declarations.
 

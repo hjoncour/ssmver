@@ -45,6 +45,8 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Init,
+    /// Check that the version in ssmver.toml is applied to all targets
+    Status,
     Update,
     Prefix {
         #[command(subcommand)]
@@ -114,27 +116,35 @@ struct PendingSync {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    match cli.command.unwrap_or(Commands::Init) {
-        Commands::Init => handle_init(),
-        Commands::Update => handle_update(),
-        Commands::Prefix { command } => handle_prefix(command),
-        Commands::Bump { level } => handle_bump(level),
-        Commands::Version => handle_version(),
+    let command = cli.command.unwrap_or_else(|| {
+        if git_repo_root().ok().map(|r| r.join(CONFIG_FILE).is_file()).unwrap_or(false) {
+            Commands::Status
+        } else {
+            Commands::Init
+        }
+    });
+
+    match command {
+        Commands::Init                                          => handle_init(),
+        Commands::Status                                        => handle_status(),
+        Commands::Update                                        => handle_update(),
+        Commands::Prefix { command }            => handle_prefix(command),
+        Commands::Bump { level }                     => handle_bump(level),
+        Commands::Version                                       => handle_version(),
         Commands::Config { key, value } => handle_config(&key, value.as_deref()),
-        Commands::Targets { command } => handle_targets(command),
-        Commands::Uninstall => handle_uninstall(),
-        Commands::Release => handle_workflow(WorkflowKind::Release),
-        Commands::Package => handle_workflow(WorkflowKind::Package),
-        Commands::Npm => handle_workflow(WorkflowKind::Npm),
-        Commands::Crates => handle_workflow(WorkflowKind::Crates),
-        Commands::Hook { command } => handle_hook(command),
+        Commands::Targets { command }          => handle_targets(command),
+        Commands::Uninstall                                     => handle_uninstall(),
+        Commands::Release                                       => handle_workflow(WorkflowKind::Release),
+        Commands::Package                                       => handle_workflow(WorkflowKind::Package),
+        Commands::Npm                                           => handle_workflow(WorkflowKind::Npm),
+        Commands::Crates                                        => handle_workflow(WorkflowKind::Crates),
+        Commands::Hook { command }                => handle_hook(command),
     }
 }
 
 fn handle_init() -> Result<()> {
     let repo_root = git_repo_root()?;
     let config_path = repo_root.join(CONFIG_FILE);
-
     let mut summary = install_or_refresh_repo(&repo_root)?;
 
     if config_path.exists() {
@@ -142,19 +152,73 @@ fn handle_init() -> Result<()> {
     } else {
         let detected_targets = discover_targets(&repo_root, &SsmverConfig::default().sync)?;
         ensure_syncable_targets(&detected_targets)?;
-        let initial_version =
-            infer_seed_version(&detected_targets)?.unwrap_or_else(|| Version::new(0, 1, 0));
+        let initial_version = infer_seed_version(&detected_targets)?.unwrap_or_else(|| Version::new(0, 1, 0));
         let mut config = SsmverConfig::default();
         config.version = initial_version.clone();
         config.save(&config_path)?;
-        summary.push(format!(
-            "Created ssmver.toml at version {}",
-            initial_version
-        ));
+        summary.push(format!("Created ssmver.toml at version {}", initial_version));
     }
 
     for line in summary {
         println!("{line}");
+    }
+
+    Ok(())
+}
+
+fn handle_status() -> Result<()> {
+    let repo_root = project_root_with_config()?;
+    let config = SsmverConfig::load(&repo_root.join(CONFIG_FILE))?;
+    let targets = discover_targets(&repo_root, &config.sync)?;
+    let expected = config.version.to_string();
+
+    let mut ok_count = 0usize;
+    let mut drift = Vec::new();
+    let mut issues = Vec::new();
+
+    for target in &targets {
+        match target.status {
+            TargetStatus::Managed => {
+                if target.current_version.as_deref() == Some(expected.as_str()) {
+                    ok_count += 1;
+                } else {
+                    drift.push(format!("  {} ({:?}): {} (expected {})", target.path.display(), target.target_kind, target.current_version.as_deref().unwrap_or("-"), expected));
+                }
+            }
+            _ => {
+                issues.push(format!("  {} ({:?}): {}", target.path.display(), target.target_kind, target.detail.as_deref().unwrap_or("skipped")));
+            }
+        }
+    }
+
+    println!("version: {expected}");
+
+    if targets.is_empty() {
+        println!("No version targets found — version is managed solely via ssmver.toml");
+        return Ok(());
+    }
+
+    if !drift.is_empty() {
+        println!("\nOut of sync:");
+        for line in &drift {
+            println!("{line}");
+        }
+        println!("\nRun `ssmver update` to fix.");
+    }
+
+    if !issues.is_empty() {
+        println!("\nSkipped/issues:");
+        for line in &issues {
+            println!("{line}");
+        }
+    }
+
+    if drift.is_empty() && issues.is_empty() {
+        println!("{ok_count} target(s) in sync");
+    }
+
+    if !drift.is_empty() {
+        std::process::exit(1);
     }
 
     Ok(())
@@ -165,24 +229,12 @@ fn handle_update() -> Result<()> {
     let config_path = repo_root.join(CONFIG_FILE);
     let mut config = SsmverConfig::load(&config_path)?;
     let current_version = config.version.clone();
-
     let mut summary = install_or_refresh_repo(&repo_root)?;
-    let changed_files = sync_project_version(
-        &repo_root,
-        &config_path,
-        &mut config,
-        current_version,
-        false,
-    )?;
-
+    let changed_files = sync_project_version(&repo_root, &config_path, &mut config, current_version, false)?;
     if changed_files.is_empty() {
         summary.push("Versioned files were already in sync".to_string());
     } else {
-        summary.push(format!(
-            "Re-synced {} file(s) to version {}",
-            changed_files.len(),
-            config.version
-        ));
+        summary.push(format!("Re-synced {} file(s) to version {}", changed_files.len(), config.version));
     }
 
     for line in summary {
@@ -251,13 +303,7 @@ fn handle_config(key: &str, value: Option<&str>) -> Result<()> {
         Some(raw_value) => {
             if key == "version" || key == "settings.version" {
                 let new_version: Version = raw_value.parse()?;
-                sync_project_version(
-                    &repo_root,
-                    &config_path,
-                    &mut config,
-                    new_version.clone(),
-                    false,
-                )?;
+                sync_project_version(&repo_root, &config_path, &mut config, new_version.clone(), false)?;
                 println!("Set version = \"{}\"", new_version);
             } else {
                 let message = config.set_config_value(key, raw_value)?;
@@ -394,14 +440,7 @@ fn require_ecosystem(targets: &[VersionTarget], ecosystem: Ecosystem, command: &
 fn resolve_package_ecosystem(targets: &[VersionTarget]) -> Result<Ecosystem> {
     let supported: Vec<Ecosystem> = GITHUB_PACKAGES_ECOSYSTEMS.iter().copied().filter(|eco| targets.iter().any(|t| t.ecosystem == *eco && t.status == TargetStatus::Managed)).collect();
     if supported.is_empty() {
-        let names: Vec<&str> = GITHUB_PACKAGES_ECOSYSTEMS.iter().map(|e| match e {
-            Ecosystem::Node   => "Node",
-            Ecosystem::Maven  => "Maven",
-            Ecosystem::Gradle => "Gradle",
-            Ecosystem::Dotnet => ".NET",
-            Ecosystem::Ruby   => "Ruby",
-            _                 => "unknown",
-        }).collect();
+        let names: Vec<String> = GITHUB_PACKAGES_ECOSYSTEMS.iter().map(|e| e.to_string()).collect();
         bail!("No ecosystem supporting GitHub Packages found. Supported: {}", names.join(", "));
     }
     if supported.len() > 1 {
@@ -415,7 +454,7 @@ fn handle_hook(command: HookCommands) -> Result<()> {
         HookCommands::PrepareCommitMsg {
             message_file,
             source,
-            commit_sha: _,
+            commit_sha: _
         } => handle_hook_prepare_commit_msg(&message_file, source.as_deref()),
         HookCommands::PostCommit => handle_hook_post_commit(),
     }
@@ -484,14 +523,7 @@ fn handle_hook_post_commit() -> Result<()> {
     }
 
     for file in &pending.files {
-        run_git(
-            &repo_root,
-            [
-                "add".to_string(),
-                "--".to_string(),
-                file.to_string_lossy().into_owned(),
-            ],
-        )?;
+        run_git(&repo_root, ["add".to_string(), "--".to_string(), file.to_string_lossy().into_owned()])?;
     }
 
     if !has_cached_changes_for_paths(&repo_root, &pending.files)? {
@@ -514,13 +546,7 @@ fn handle_hook_post_commit() -> Result<()> {
     Ok(())
 }
 
-fn sync_project_version(
-    repo_root: &Path,
-    config_path: &Path,
-    config: &mut SsmverConfig,
-    new_version: Version,
-    persist_pending: bool,
-) -> Result<Vec<PathBuf>> {
+fn sync_project_version(repo_root: &Path, config_path: &Path, config: &mut SsmverConfig, new_version: Version, persist_pending: bool) -> Result<Vec<PathBuf>> {
     let targets = discover_targets(repo_root, &config.sync)?;
     ensure_syncable_targets(&targets)?;
 
@@ -553,20 +579,12 @@ fn install_or_refresh_repo(repo_root: &Path) -> Result<Vec<String>> {
         .context("failed to canonicalize current ssmver binary path")?;
 
     let mut summary = Vec::new();
-    fs::create_dir_all(&hooks_dir)
-        .with_context(|| format!("failed to create {}", hooks_dir.display()))?;
+    fs::create_dir_all(&hooks_dir).with_context(|| format!("failed to create {}", hooks_dir.display()))?;
     summary.push(format!("Ensured {}", install_root.display()));
 
-    write_executable(
-        &hooks_dir.join("prepare-commit-msg"),
-        &hooks::prepare_commit_msg_script(&binary_path),
-    )?;
-    write_executable(
-        &hooks_dir.join("post-commit"),
-        &hooks::post_commit_script(&binary_path),
-    )?;
+    write_executable(&hooks_dir.join("prepare-commit-msg"), &hooks::prepare_commit_msg_script(&binary_path))?;
+    write_executable(&hooks_dir.join("post-commit"), &hooks::post_commit_script(&binary_path))?;
     summary.push("Generated hook wrappers".to_string());
-
     set_hooks_path(repo_root)?;
     summary.push("Set git core.hooksPath to .ssmver/hooks".to_string());
 
@@ -579,14 +597,10 @@ fn install_or_refresh_repo(repo_root: &Path) -> Result<Vec<String>> {
     Ok(summary)
 }
 
-fn compute_commit_bump_version(
-    repo_root: &Path,
-    config: &SsmverConfig,
-    level: BumpLevel,
-) -> Result<Option<Version>> {
+fn compute_commit_bump_version(repo_root: &Path, config: &SsmverConfig, level: BumpLevel) -> Result<Option<Version>> {
     match config.settings.mode {
-        config::Mode::All => Ok(Some(compute_next_version(&config.version, level))),
-        config::Mode::Branch => {
+        config::Mode::All       => Ok(Some(compute_next_version(&config.version, level))),
+        config::Mode::Branch    => {
             let Some(main_ref) = find_main_ref(repo_root)? else {
                 return Ok(Some(compute_next_version(&config.version, level)));
             };
@@ -600,12 +614,7 @@ fn compute_commit_bump_version(
             }
 
             let base_version = show_file_at_rev(repo_root, &base, Path::new(CONFIG_FILE))?
-                .and_then(|content| {
-                    SsmverConfig::from_str(&content)
-                        .ok()
-                        .map(|config| config.version)
-                })
-                .unwrap_or_else(|| config.version.clone());
+                .and_then(|content| {SsmverConfig::from_str(&content).ok().map(|config| config.version)}).unwrap_or_else(|| config.version.clone());
             Ok(Some(compute_next_version(&base_version, level)))
         }
     }
@@ -629,13 +638,9 @@ fn bump_priority(level: BumpLevel) -> u8 {
 
 fn should_prompt_for_body(config: &SsmverConfig, prefix: &str) -> bool {
     match config.settings.prompt {
-        PromptMode::Never => false,
-        PromptMode::Always => true,
-        PromptMode::Ask => config
-            .settings
-            .prompt_prefixes
-            .iter()
-            .any(|candidate| candidate == prefix),
+        PromptMode::Never   => false,
+        PromptMode::Always  => true,
+        PromptMode::Ask     => config.settings.prompt_prefixes.iter().any(|candidate| candidate == prefix)
     }
 }
 
@@ -647,17 +652,14 @@ fn commit_message_has_body(message_file: &Path) -> Result<bool> {
 fn prompt_for_commit_body(message_file: &Path, prefix: &str) -> Result<()> {
     let mut tty_writer = match OpenOptions::new().write(true).open("/dev/tty") {
         Ok(tty) => tty,
-        Err(_) => return Ok(()),
+        Err(_) => return Ok(())
     };
     let tty_reader = match OpenOptions::new().read(true).open("/dev/tty") {
         Ok(tty) => tty,
-        Err(_) => return Ok(()),
+        Err(_) => return Ok(())
     };
 
-    write!(
-        tty_writer,
-        "ssmver description for {prefix} commit (optional): "
-    )?;
+    write!(tty_writer, "ssmver description for {prefix} commit (optional): ")?;
     tty_writer.flush()?;
 
     let mut line = String::new();
@@ -680,15 +682,9 @@ fn ensure_syncable_targets(targets: &[VersionTarget]) -> Result<()> {
         return Ok(());
     }
 
-    let mut lines =
-        vec!["Refusing to sync because some supported files are dynamic or invalid:".to_string()];
+    let mut lines = vec!["Refusing to sync because some supported files are dynamic or invalid:".to_string()];
     for target in blockers {
-        lines.push(format!(
-            "- {} ({:?}): {}",
-            target.path.display(),
-            target.target_kind,
-            target.detail.as_deref().unwrap_or("unsupported target")
-        ));
+        lines.push(format!("- {} ({:?}): {}", target.path.display(), target.target_kind, target.detail.as_deref().unwrap_or("unsupported target")));
     }
     bail!(lines.join("\n"))
 }
@@ -750,9 +746,7 @@ fn write_executable(path: &Path, contents: &str) -> Result<()> {
     {
         use std::os::unix::fs::PermissionsExt;
 
-        let mut permissions = fs::metadata(path)
-            .with_context(|| format!("failed to read metadata for {}", path.display()))?
-            .permissions();
+        let mut permissions = fs::metadata(path).with_context(|| format!("failed to read metadata for {}", path.display()))?.permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions)
             .with_context(|| format!("failed to chmod {}", path.display()))?;
