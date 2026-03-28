@@ -1,4 +1,4 @@
-version = "0.4.0"
+version = "0.5.0"
 
 [settings]
 mode = "branch"
@@ -18,18 +18,8 @@ feature = "minor"
 fix = "patch"
 release = "major"
 
-# Release workflow generation settings.
-# Run `ssmver release`, `ssmver crates`, `ssmver npm`, or `ssmver package`
-# to generate GitHub Actions workflows, then re-run after changing these
-# values to regenerate with updated filters.
 [release]
 enabled = true
-# Bump levels that trigger a release. Empty means every bump triggers a release.
-# Example: ["minor", "major"] skips patch-only bumps.
 on_bump = []
-# Only release when the commit message contains this string.
-# Example: "[release]"
 match = ""
-# Skip releasing when the commit message contains this string.
-# Example: "[skip-release]"
 skip = ""
