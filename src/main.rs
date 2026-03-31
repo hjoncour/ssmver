@@ -1,3 +1,4 @@
+mod changelog;
 mod config;
 mod git;
 mod hooks;
@@ -65,6 +66,8 @@ enum Commands {
         command: TargetsCommands,
     },
     Uninstall,
+    /// Enable changelog generation and install default templates
+    Changelog,
     /// Generate a GitHub Actions workflow to create GitHub Releases
     Release,
     /// Generate a GitHub Actions workflow to publish to GitHub Packages
@@ -134,6 +137,7 @@ fn main() -> Result<()> {
         Commands::Config { key, value } => handle_config(&key, value.as_deref()),
         Commands::Targets { command }          => handle_targets(command),
         Commands::Uninstall                                     => handle_uninstall(),
+        Commands::Changelog                                     => handle_changelog(),
         Commands::Release                                       => handle_workflow(WorkflowKind::Release),
         Commands::Package                                       => handle_workflow(WorkflowKind::Package),
         Commands::Npm                                           => handle_workflow(WorkflowKind::Npm),
@@ -370,6 +374,49 @@ fn handle_uninstall() -> Result<()> {
 
     for line in summary {
         println!("{line}");
+    }
+
+    Ok(())
+}
+
+fn handle_changelog() -> Result<()> {
+    let repo_root = project_root_with_config()?;
+    let config_path = repo_root.join(CONFIG_FILE);
+    let mut config = SsmverConfig::load(&config_path)?;
+
+    if !config.changelog.enabled {
+        config.changelog.enabled = true;
+        config.save(&config_path)?;
+        println!("Enabled [changelog] in ssmver.toml");
+    } else {
+        println!("Changelog is already enabled");
+    }
+
+    let created = changelog::ensure_default_templates()?;
+    let templates_dir = changelog::templates_dir()?;
+    if !created.is_empty() {
+        println!("Created default templates in {}", templates_dir.display());
+        for name in &created {
+            println!("  {name}");
+        }
+    }
+
+    let available = changelog::list_templates()?;
+    if !available.is_empty() {
+        println!("\nAvailable templates:");
+        for name in &available {
+            let marker = if config.changelog.template == *name {"(active)"} else {""};
+            println!("  {name} {marker}");
+        }
+    }
+
+    if config.changelog.template == "none" {
+        println!("\nNo template selected. Set one with: ssmver config changelog.template <name>");
+    } else if let Some(content) = changelog::resolve_template(&config.changelog.template)? {
+        println!("\nActive template preview ({}):", config.changelog.template);
+        for line in content.lines().take(10) {
+            println!("  {line}");
+        }
     }
 
     Ok(())

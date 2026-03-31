@@ -1,4 +1,4 @@
-version = "0.5.1"
+version = "0.6.0"
 
 [settings]
 mode = "branch"
@@ -23,3 +23,8 @@ enabled = true
 on_bump = []
 match = ""
 skip = ""
+
+[changelog]
+enabled = true
+on_bump = []
+template = "conventional"

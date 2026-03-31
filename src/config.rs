@@ -102,6 +102,26 @@ pub struct ReleaseConfig {
     pub skip: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangelogConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub on_bump: Vec<BumpLevel>,
+    #[serde(default = "default_changelog_template")]
+    pub template: String,
+}
+
+impl Default for ChangelogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            on_bump: Vec::new(),
+            template: default_changelog_template(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_mode")]
@@ -154,6 +174,8 @@ pub struct SsmverConfig {
     pub prefixes: BTreeMap<String, BumpLevel>,
     #[serde(default)]
     pub release: ReleaseConfig,
+    #[serde(default)]
+    pub changelog: ChangelogConfig,
 }
 
 impl Default for SsmverConfig {
@@ -164,6 +186,7 @@ impl Default for SsmverConfig {
             sync: SyncSettings::default(),
             prefixes: default_prefixes(),
             release: ReleaseConfig::default(),
+            changelog: ChangelogConfig::default(),
         }
     }
 }
@@ -197,6 +220,9 @@ impl SsmverConfig {
             "release.on_bump"       => Ok(self.release.on_bump.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(",")),
             "release.match"         => Ok(self.release.r#match.clone()),
             "release.skip"          => Ok(self.release.skip.clone()),
+            "changelog.enabled"     => Ok(self.changelog.enabled.to_string()),
+            "changelog.on_bump"     => Ok(self.changelog.on_bump.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(",")),
+            "changelog.template"    => Ok(self.changelog.template.clone()),
             _                       => bail!("Unsupported config key: {key}"),
         }
     }
@@ -251,6 +277,19 @@ impl SsmverConfig {
                 self.release.skip = raw_value.trim().to_string();
                 Ok(format!("Set release.skip = \"{}\"", self.release.skip))
             }
+            "changelog.enabled" => {
+                self.changelog.enabled = parse_bool(raw_value)?;
+                Ok(format!("Set changelog.enabled = {}", self.changelog.enabled))
+            }
+            "changelog.on_bump" => {
+                self.changelog.on_bump = parse_bump_level_list(raw_value)?;
+                let display = self.changelog.on_bump.iter().map(|l| l.to_string()).collect::<Vec<_>>();
+                Ok(format!("Set changelog.on_bump = {}", render_string_array(&display)))
+            }
+            "changelog.template" => {
+                self.changelog.template = raw_value.trim().to_string();
+                Ok(format!("Set changelog.template = \"{}\"", self.changelog.template))
+            }
             _ => bail!("Unsupported config key: {key}"),
         }
     }
@@ -294,7 +333,10 @@ fn normalize_key(key: &str) -> &str {
         "release.skip"              => "release.skip",
         "release.enabled"           => "release.enabled",
         "release.on_bump"           => "release.on_bump",
-        other                 => other,
+        "changelog.enabled"         => "changelog.enabled",
+        "changelog.on_bump"         => "changelog.on_bump",
+        "changelog.template"        => "changelog.template",
+        other                       => other,
     }
 }
 
@@ -392,6 +434,10 @@ fn default_constants_mode() -> ConstantsMode {
     ConstantsMode::Curated
 }
 
+fn default_changelog_template() -> String {
+    "none".to_string()
+}
+
 fn default_prefixes() -> BTreeMap<String, BumpLevel> {
     BTreeMap::from([
         ("feature".to_string(), BumpLevel::Minor),
@@ -425,5 +471,26 @@ mod tests {
         assert_eq!(config.sync.exclude, Vec::<String>::new());
         assert_eq!(config.sync.monorepo, MonorepoMode::Lockstep);
         assert_eq!(config.sync.constants, ConstantsMode::Curated);
+    }
+
+    #[test]
+    fn config_defaults_include_changelog_settings() {
+        let config = SsmverConfig::default();
+        assert!(!config.changelog.enabled);
+        assert!(config.changelog.on_bump.is_empty());
+        assert_eq!(config.changelog.template, "none");
+    }
+
+    #[test]
+    fn changelog_config_round_trips_through_toml() {
+        let mut config = SsmverConfig::default();
+        config.changelog.enabled = true;
+        config.changelog.on_bump = vec![BumpLevel::Minor, BumpLevel::Major];
+        config.changelog.template = "keepachangelog".to_string();
+        let raw = toml::to_string_pretty(&config).unwrap();
+        let parsed: SsmverConfig = toml::from_str(&raw).unwrap();
+        assert!(parsed.changelog.enabled);
+        assert_eq!(parsed.changelog.on_bump, vec![BumpLevel::Minor, BumpLevel::Major]);
+        assert_eq!(parsed.changelog.template, "keepachangelog");
     }
 }
