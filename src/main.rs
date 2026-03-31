@@ -541,13 +541,12 @@ fn handle_hook_prepare_commit_msg(message_file: &Path, source: Option<&str>) -> 
         return Ok(());
     };
 
-    let Some(next_version) = compute_commit_bump_version(&repo_root, &config, level)? else {
-        return Ok(());
-    };
-    sync_project_version(&repo_root, &config_path, &mut config, next_version.clone(), true)?;
+    if let Some(next_version) = compute_commit_bump_version(&repo_root, &config, level)? {
+        sync_project_version(&repo_root, &config_path, &mut config, next_version, true)?;
+    }
 
     if should_collect_changelog(&config, level) {
-        collect_and_prepend_changelog(&repo_root, &config, &next_version, &first_line)?;
+        collect_and_prepend_changelog(&repo_root, &config, &config.version, &first_line)?;
     }
 
     if should_prompt_for_body(&config, &prefix) && !commit_message_has_body(message_file)? {
