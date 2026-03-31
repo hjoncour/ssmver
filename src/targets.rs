@@ -166,13 +166,7 @@ impl VersionTarget {
 }
 
 pub fn discover_targets(repo_root: &Path, sync: &SyncSettings) -> Result<Vec<VersionTarget>> {
-    let walker = WalkBuilder::new(repo_root)
-        .hidden(false)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .build();
-
+    let walker = WalkBuilder::new(repo_root).hidden(false).git_ignore(true).git_global(true).git_exclude(true).build();
     let mut targets = Vec::new();
     for entry in walker {
         let entry = entry?;
@@ -258,10 +252,7 @@ pub fn apply_version_to_targets(repo_root: &Path, targets: &[VersionTarget], new
 }
 
 pub fn blocking_targets<'a>(targets: &'a [VersionTarget]) -> Vec<&'a VersionTarget> {
-    targets
-        .iter()
-        .filter(|target| target.is_blocking())
-        .collect()
+    targets.iter().filter(|target| target.is_blocking()).collect()
 }
 
 pub fn infer_seed_version(targets: &[VersionTarget]) -> Result<Option<Version>> {
@@ -272,10 +263,7 @@ pub fn infer_seed_version(targets: &[VersionTarget]) -> Result<Option<Version>> 
         .map(Version::parse)
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
-    let mut unique = versions
-        .into_iter()
-        .map(|version| version.to_string())
-        .collect::<Vec<_>>();
+    let mut unique = versions.into_iter().map(|version| version.to_string()).collect::<Vec<_>>();
     unique.sort();
     unique.dedup();
 
@@ -305,34 +293,27 @@ fn detect_targets_for_file(repo_root: &Path, relative_path: &Path, excluded: boo
         return Ok(Vec::new());
     }
 
-    let file_name = relative_path
-        .file_name()
-        .and_then(OsStr::to_str)
-        .unwrap_or_default();
+    let file_name = relative_path.file_name().and_then(OsStr::to_str).unwrap_or_default();
     let targets = match file_name {
-        "Cargo.toml" => detect_cargo_toml(repo_root, relative_path)?,
-        "package.json" => detect_package_json(repo_root, relative_path)?,
-        "package-lock.json" | "npm-shrinkwrap.json" => {
-            detect_npm_lockfile(repo_root, relative_path)?
-        }
-        "pom.xml" => detect_maven_pom(repo_root, relative_path)?,
-        "gradle.properties" => detect_gradle_properties(repo_root, relative_path)?,
-        "build.gradle" | "build.gradle.kts" => {
-            detect_gradle_build_script(repo_root, relative_path)?
-        }
-        "pyproject.toml" => detect_pyproject_toml(repo_root, relative_path)?,
-        "setup.cfg" => detect_setup_cfg(repo_root, relative_path)?,
-        "setup.py" => detect_setup_py(repo_root, relative_path)?,
-        "__init__.py" | "version.py" => detect_python_dunder_version(repo_root, relative_path)?,
-        "Directory.Build.props" => detect_dotnet_project(repo_root, relative_path)?,
-        "AssemblyInfo.cs" => detect_dotnet_assembly_info(repo_root, relative_path)?,
-        "composer.json" => detect_composer_json(repo_root, relative_path)?,
-        other if other.ends_with(".csproj") => detect_dotnet_project(repo_root, relative_path)?,
-        other if other.ends_with(".gemspec") => detect_ruby_gemspec(repo_root, relative_path)?,
-        "project.pbxproj" => detect_xcode_project(repo_root, relative_path)?,
-        "Info.plist" => detect_info_plist(repo_root, relative_path)?,
-        "version.rb" => detect_ruby_version_file(repo_root, relative_path)?,
-        _ => Vec::new(),
+        "Cargo.toml"                                    => detect_cargo_toml(repo_root, relative_path)?,
+        "package.json"                                  => detect_package_json(repo_root, relative_path)?,
+        "package-lock.json" | "npm-shrinkwrap.json"     => detect_npm_lockfile(repo_root, relative_path)?,
+        "pom.xml"                                       => detect_maven_pom(repo_root, relative_path)?,
+        "gradle.properties"                             => detect_gradle_properties(repo_root, relative_path)?,
+        "build.gradle" | "build.gradle.kts"             => detect_gradle_build_script(repo_root, relative_path)?,
+        "pyproject.toml"                                => detect_pyproject_toml(repo_root, relative_path)?,
+        "setup.cfg"                                     => detect_setup_cfg(repo_root, relative_path)?,
+        "setup.py"                                      => detect_setup_py(repo_root, relative_path)?,
+        "__init__.py" | "version.py"                    => detect_python_dunder_version(repo_root, relative_path)?,
+        "Directory.Build.props"                         => detect_dotnet_project(repo_root, relative_path)?,
+        "AssemblyInfo.cs"                               => detect_dotnet_assembly_info(repo_root, relative_path)?,
+        "composer.json"                                 => detect_composer_json(repo_root, relative_path)?,
+        other if other.ends_with(".csproj")       => detect_dotnet_project(repo_root, relative_path)?,
+        other if other.ends_with(".gemspec")      => detect_ruby_gemspec(repo_root, relative_path)?,
+        "project.pbxproj"                               => detect_xcode_project(repo_root, relative_path)?,
+        "Info.plist"                                    => detect_info_plist(repo_root, relative_path)?,
+        "version.rb"                                    => detect_ruby_version_file(repo_root, relative_path)?,
+        _                                               => Vec::new(),
     };
 
     Ok(targets)
@@ -345,8 +326,7 @@ fn detect_cargo_toml(repo_root: &Path, relative_path: &Path) -> Result<Vec<Versi
 
     let package_version = item_string(get_item(&doc, &["package", "version"]));
     let workspace_version = item_string(get_item(&doc, &["workspace", "package", "version"]));
-    let inherited =
-        item_bool(get_item(&doc, &["package", "version", "workspace"])).unwrap_or(false);
+    let inherited = item_bool(get_item(&doc, &["package", "version", "workspace"])).unwrap_or(false);
     let has_package_version = package_version.is_some();
     let has_workspace_version = workspace_version.is_some();
 
@@ -385,13 +365,7 @@ fn detect_package_json(repo_root: &Path, relative_path: &Path) -> Result<Vec<Ver
         return Ok(Vec::new());
     };
 
-    Ok(vec![VersionTarget::managed(
-        Ecosystem::Node,
-        relative_path,
-        TargetKind::PackageJson,
-        TargetAuthority::Literal,
-        parse_version(Ecosystem::Node, relative_path, TargetKind::PackageJson, TargetAuthority::Literal, version)?,
-    )])
+    Ok(vec![VersionTarget::managed(Ecosystem::Node, relative_path, TargetKind::PackageJson, TargetAuthority::Literal, parse_version(Ecosystem::Node, relative_path, TargetKind::PackageJson, TargetAuthority::Literal, version)?)])
 }
 
 fn detect_npm_lockfile(repo_root: &Path, relative_path: &Path) -> Result<Vec<VersionTarget>> {
@@ -507,8 +481,7 @@ fn detect_gradle_build_script(repo_root: &Path, relative_path: &Path) -> Result<
         return Ok(vec![VersionTarget::issue(Ecosystem::Gradle, relative_path, TargetKind::GradleBuildScript, TargetAuthority::Literal, TargetStatus::Error, None, "expected exactly one top-level literal version assignment")]);
     }
 
-    Ok(vec![VersionTarget::managed(Ecosystem::Gradle, relative_path, TargetKind::GradleBuildScript, TargetAuthority::Literal, parse_version(Ecosystem::Gradle, relative_path, TargetKind::GradleBuildScript, TargetAuthority::Literal, &literal_matches[0])?,
-    )])
+    Ok(vec![VersionTarget::managed(Ecosystem::Gradle, relative_path, TargetKind::GradleBuildScript, TargetAuthority::Literal, parse_version(Ecosystem::Gradle, relative_path, TargetKind::GradleBuildScript, TargetAuthority::Literal, &literal_matches[0])?)])
 }
 
 fn detect_pyproject_toml(repo_root: &Path, relative_path: &Path) -> Result<Vec<VersionTarget>> {
@@ -548,39 +521,17 @@ fn detect_setup_cfg(repo_root: &Path, relative_path: &Path) -> Result<Vec<Versio
 fn detect_setup_py(repo_root: &Path, relative_path: &Path) -> Result<Vec<VersionTarget>> {
     let path = repo_root.join(relative_path);
     let content = fs::read_to_string(&path)?;
-    let literal_matches = SETUP_PY_LITERAL_RE
-        .captures_iter(&content)
-        .map(|captures| capture_regex_value(&captures).unwrap().to_string())
-        .collect::<Vec<_>>();
-    let generic_matches = Regex::new(r"version\s*=")
-        .unwrap()
-        .find_iter(&content)
-        .count();
+    let literal_matches = SETUP_PY_LITERAL_RE.captures_iter(&content).map(|captures| capture_regex_value(&captures).unwrap().to_string()).collect::<Vec<_>>();
+    let generic_matches = Regex::new(r"version\s*=").unwrap().find_iter(&content).count();
 
     if literal_matches.is_empty() && generic_matches == 0 {
         return Ok(Vec::new());
     }
     if generic_matches > literal_matches.len() {
-        return Ok(vec![VersionTarget::issue(
-            Ecosystem::Python,
-            relative_path,
-            TargetKind::SetupPy,
-            TargetAuthority::Literal,
-            TargetStatus::SkippedDynamic,
-            None,
-            "dynamic setup.py version is not supported",
-        )]);
+        return Ok(vec![VersionTarget::issue(Ecosystem::Python, relative_path, TargetKind::SetupPy, TargetAuthority::Literal, TargetStatus::SkippedDynamic, None, "dynamic setup.py version is not supported")]);
     }
     if literal_matches.len() != 1 {
-        return Ok(vec![VersionTarget::issue(
-            Ecosystem::Python,
-            relative_path,
-            TargetKind::SetupPy,
-            TargetAuthority::Literal,
-            TargetStatus::Error,
-            None,
-            "expected exactly one literal setup.py version assignment",
-        )]);
+        return Ok(vec![VersionTarget::issue(Ecosystem::Python, relative_path, TargetKind::SetupPy, TargetAuthority::Literal, TargetStatus::Error, None, "expected exactly one literal setup.py version assignment")]);
     }
 
     Ok(vec![VersionTarget::managed(Ecosystem::Python, relative_path, TargetKind::SetupPy, TargetAuthority::Literal, parse_version(Ecosystem::Python, relative_path, TargetKind::SetupPy, TargetAuthority::Literal, &literal_matches[0])?)])
@@ -615,10 +566,7 @@ fn detect_dotnet_project(repo_root: &Path, relative_path: &Path) -> Result<Vec<V
     if values.is_empty() {
         return Ok(Vec::new());
     }
-    if values
-        .iter()
-        .any(|value| value.contains("$(") || value.contains("@("))
-    {
+    if values.iter().any(|value| value.contains("$(") || value.contains("@(")) {
         return Ok(vec![VersionTarget::issue(Ecosystem::Dotnet, relative_path, TargetKind::DotnetProject, TargetAuthority::Literal, TargetStatus::SkippedDynamic, None, "dynamic <Version> value is not supported")]);
     }
 
@@ -628,15 +576,9 @@ fn detect_dotnet_project(repo_root: &Path, relative_path: &Path) -> Result<Vec<V
 fn detect_dotnet_assembly_info(repo_root: &Path, relative_path: &Path) -> Result<Vec<VersionTarget>> {
     let path = repo_root.join(relative_path);
     let content = fs::read_to_string(&path)?;
-    let assembly = DOTNET_ASSEMBLY_VERSION_RE
-        .captures(&content)
-        .map(|captures| capture_regex_value(&captures).unwrap().to_string());
-    let file = DOTNET_FILE_VERSION_RE
-        .captures(&content)
-        .map(|captures| capture_regex_value(&captures).unwrap().to_string());
-    let informational = DOTNET_INFO_VERSION_RE
-        .captures(&content)
-        .map(|captures| capture_regex_value(&captures).unwrap().to_string());
+    let assembly = DOTNET_ASSEMBLY_VERSION_RE.captures(&content).map(|captures| capture_regex_value(&captures).unwrap().to_string());
+    let file = DOTNET_FILE_VERSION_RE.captures(&content).map(|captures| capture_regex_value(&captures).unwrap().to_string());
+    let informational = DOTNET_INFO_VERSION_RE.captures(&content).map(|captures| capture_regex_value(&captures).unwrap().to_string());
 
     if assembly.is_none() && file.is_none() && informational.is_none() {
         return Ok(Vec::new());
@@ -644,14 +586,10 @@ fn detect_dotnet_assembly_info(repo_root: &Path, relative_path: &Path) -> Result
 
     let mut normalized = Vec::new();
     if let Some(value) = assembly.as_deref() {
-        normalized.push(normalize_dotnet_numeric_version(value).ok_or_else(|| {
-            anyhow!("unsupported AssemblyVersion format in {}", relative_path.display())
-        })?);
+        normalized.push(normalize_dotnet_numeric_version(value).ok_or_else(|| {anyhow!("unsupported AssemblyVersion format in {}", relative_path.display())})?);
     }
     if let Some(value) = file.as_deref() {
-        normalized.push(normalize_dotnet_numeric_version(value).ok_or_else(|| {
-            anyhow!("unsupported AssemblyFileVersion format in {}", relative_path.display())
-        })?);
+        normalized.push(normalize_dotnet_numeric_version(value).ok_or_else(|| {anyhow!("unsupported AssemblyFileVersion format in {}", relative_path.display())})?);
     }
     if let Some(value) = informational.as_deref() {
         normalized.push(value.to_string());
@@ -663,28 +601,14 @@ fn detect_dotnet_assembly_info(repo_root: &Path, relative_path: &Path) -> Result
 fn detect_ruby_gemspec(repo_root: &Path, relative_path: &Path) -> Result<Vec<VersionTarget>> {
     let path = repo_root.join(relative_path);
     let content = fs::read_to_string(&path)?;
-    let literal_matches = RUBY_GEMSPEC_VERSION_RE
-        .captures_iter(&content)
-        .map(|captures| capture_regex_value(&captures).unwrap().to_string())
-        .collect::<Vec<_>>();
-    let generic_matches = Regex::new(r"(?m)^\s*spec\.version\s*=")
-        .unwrap()
-        .find_iter(&content)
-        .count();
+    let literal_matches = RUBY_GEMSPEC_VERSION_RE.captures_iter(&content).map(|captures| capture_regex_value(&captures).unwrap().to_string()).collect::<Vec<_>>();
+    let generic_matches = Regex::new(r"(?m)^\s*spec\.version\s*=").unwrap().find_iter(&content).count();
 
     if literal_matches.is_empty() && generic_matches == 0 {
         return Ok(Vec::new());
     }
     if generic_matches > literal_matches.len() {
-        return Ok(vec![VersionTarget::issue(
-            Ecosystem::Ruby,
-            relative_path,
-            TargetKind::RubyGemspec,
-            TargetAuthority::Literal,
-            TargetStatus::SkippedDynamic,
-            None,
-            "dynamic gemspec version is not supported",
-        )]);
+        return Ok(vec![VersionTarget::issue(Ecosystem::Ruby, relative_path, TargetKind::RubyGemspec, TargetAuthority::Literal, TargetStatus::SkippedDynamic, None, "dynamic gemspec version is not supported")]);
     }
     if literal_matches.len() != 1 {
         return Ok(vec![VersionTarget::issue(Ecosystem::Ruby, relative_path, TargetKind::RubyGemspec, TargetAuthority::Literal, TargetStatus::Error, None, "expected exactly one literal gemspec version assignment")]);
@@ -700,51 +624,24 @@ fn detect_ruby_version_file(repo_root: &Path, relative_path: &Path) -> Result<Ve
 
     let path = repo_root.join(relative_path);
     let content = fs::read_to_string(&path)?;
-    let literal_matches = RUBY_VERSION_RB_RE
-        .captures_iter(&content)
-        .map(|captures| capture_regex_value(&captures).unwrap().to_string())
-        .collect::<Vec<_>>();
-    let generic_matches = Regex::new(r"(?m)^\s*VERSION\s*=")
-        .unwrap()
-        .find_iter(&content)
-        .count();
+    let literal_matches = RUBY_VERSION_RB_RE.captures_iter(&content).map(|captures| capture_regex_value(&captures).unwrap().to_string()).collect::<Vec<_>>();
+    let generic_matches = Regex::new(r"(?m)^\s*VERSION\s*=").unwrap().find_iter(&content).count();
 
     if literal_matches.is_empty() && generic_matches == 0 {
         return Ok(Vec::new());
     }
     if generic_matches > literal_matches.len() {
-        return Ok(vec![VersionTarget::issue(
-            Ecosystem::Ruby,
-            relative_path,
-            TargetKind::RubyVersionFile,
-            TargetAuthority::CuratedConstant,
-            TargetStatus::SkippedDynamic,
-            None,
-            "dynamic Ruby VERSION constant is not supported",
-        )]);
+        return Ok(vec![VersionTarget::issue(Ecosystem::Ruby, relative_path, TargetKind::RubyVersionFile, TargetAuthority::CuratedConstant, TargetStatus::SkippedDynamic, None, "dynamic Ruby VERSION constant is not supported")]);
     }
     if literal_matches.len() != 1 {
-        return Ok(vec![VersionTarget::issue(
-            Ecosystem::Ruby,
-            relative_path,
-            TargetKind::RubyVersionFile,
-            TargetAuthority::CuratedConstant,
-            TargetStatus::Error,
-            None,
-            "expected exactly one literal Ruby VERSION constant",
-        )]);
+        return Ok(vec![VersionTarget::issue(Ecosystem::Ruby, relative_path, TargetKind::RubyVersionFile, TargetAuthority::CuratedConstant, TargetStatus::Error, None, "expected exactly one literal Ruby VERSION constant")]);
     }
 
-    Ok(vec![VersionTarget::managed(Ecosystem::Ruby, relative_path, TargetKind::RubyVersionFile, TargetAuthority::CuratedConstant, parse_version(Ecosystem::Ruby, relative_path, TargetKind::RubyVersionFile, TargetAuthority::CuratedConstant, &literal_matches[0])?
-    )])
+    Ok(vec![VersionTarget::managed(Ecosystem::Ruby, relative_path, TargetKind::RubyVersionFile, TargetAuthority::CuratedConstant, parse_version(Ecosystem::Ruby, relative_path, TargetKind::RubyVersionFile, TargetAuthority::CuratedConstant, &literal_matches[0])?)])
 }
 
 fn detect_xcode_project(repo_root: &Path, relative_path: &Path) -> Result<Vec<VersionTarget>> {
-    if !path_contains_component(relative_path, "project.pbxproj")
-        && !relative_path
-            .components()
-            .any(|c| matches!(c, Component::Normal(name) if name.to_string_lossy().ends_with(".xcodeproj")))
-    {
+    if !path_contains_component(relative_path, "project.pbxproj") && !relative_path.components().any(|c| matches!(c, Component::Normal(name) if name.to_string_lossy().ends_with(".xcodeproj"))) {
         return Ok(Vec::new());
     }
 
@@ -763,30 +660,14 @@ fn detect_xcode_project(repo_root: &Path, relative_path: &Path) -> Result<Vec<Ve
         return Ok(Vec::new());
     }
     if generic_count > literal_matches.len() {
-        return Ok(vec![VersionTarget::issue(
-            Ecosystem::Swift,
-            relative_path,
-            TargetKind::XcodeProject,
-            TargetAuthority::Literal,
-            TargetStatus::SkippedDynamic,
-            None,
-            "dynamic or unsupported MARKETING_VERSION assignment",
-        )]);
+        return Ok(vec![VersionTarget::issue(Ecosystem::Swift, relative_path, TargetKind::XcodeProject, TargetAuthority::Literal, TargetStatus::SkippedDynamic, None, "dynamic or unsupported MARKETING_VERSION assignment")]);
     }
 
     let mut unique: Vec<String> = literal_matches.clone();
     unique.sort();
     unique.dedup();
     if unique.len() > 1 {
-        return Ok(vec![VersionTarget::issue(
-            Ecosystem::Swift,
-            relative_path,
-            TargetKind::XcodeProject,
-            TargetAuthority::Literal,
-            TargetStatus::Error,
-            None,
-            format!("conflicting MARKETING_VERSION values: {}", unique.join(", ")),
-        )]);
+        return Ok(vec![VersionTarget::issue(Ecosystem::Swift, relative_path, TargetKind::XcodeProject, TargetAuthority::Literal, TargetStatus::Error, None, format!("conflicting MARKETING_VERSION values: {}", unique.join(", ")))]);
     }
 
     let raw = &unique[0];
@@ -796,13 +677,7 @@ fn detect_xcode_project(repo_root: &Path, relative_path: &Path) -> Result<Vec<Ve
         raw.to_string()
     };
 
-    Ok(vec![VersionTarget::managed(
-        Ecosystem::Swift,
-        relative_path,
-        TargetKind::XcodeProject,
-        TargetAuthority::Literal,
-        parse_version(Ecosystem::Swift, relative_path, TargetKind::XcodeProject, TargetAuthority::Literal, &normalized)?,
-    )])
+    Ok(vec![VersionTarget::managed(Ecosystem::Swift, relative_path, TargetKind::XcodeProject, TargetAuthority::Literal, parse_version(Ecosystem::Swift, relative_path, TargetKind::XcodeProject, TargetAuthority::Literal, &normalized)?)])
 }
 
 fn detect_info_plist(repo_root: &Path, relative_path: &Path) -> Result<Vec<VersionTarget>> {
@@ -824,13 +699,7 @@ fn detect_info_plist(repo_root: &Path, relative_path: &Path) -> Result<Vec<Versi
         value.to_string()
     };
 
-    Ok(vec![VersionTarget::managed(
-        Ecosystem::Swift,
-        relative_path,
-        TargetKind::InfoPlist,
-        TargetAuthority::Literal,
-        parse_version(Ecosystem::Swift, relative_path, TargetKind::InfoPlist, TargetAuthority::Literal, &normalized)?,
-    )])
+    Ok(vec![VersionTarget::managed(Ecosystem::Swift, relative_path, TargetKind::InfoPlist, TargetAuthority::Literal, parse_version(Ecosystem::Swift, relative_path, TargetKind::InfoPlist, TargetAuthority::Literal, &normalized)?)])
 }
 
 fn detect_composer_json(repo_root: &Path, relative_path: &Path) -> Result<Vec<VersionTarget>> {
@@ -1115,10 +984,7 @@ fn update_json_version_field<F>(path: &Path, new_version: &Version, should_manag
     if !should_manage(root) {
         return Ok(false);
     }
-    root.insert(
-        "version".to_string(),
-        JsonValue::String(new_version.to_string()),
-    );
+    root.insert("version".to_string(), JsonValue::String(new_version.to_string()));
     let updated = serde_json::to_string_pretty(&json)?;
     if updated == content {
         return Ok(false);
@@ -1233,11 +1099,7 @@ fn collect_texts_by_name(element: &Element, name: &str, output: &mut Vec<String>
     }
 }
 
-fn update_elements_named(
-    element: &mut Element,
-    name: &str,
-    callback: &mut impl FnMut(&mut Element),
-) {
+fn update_elements_named(element: &mut Element, name: &str, callback: &mut impl FnMut(&mut Element)) {
     if local_name(&element.name) == name {
         callback(element);
     }
@@ -1401,55 +1263,28 @@ mod tests {
     #[test]
     fn extracts_commit_prefixes() {
         assert_eq!(extract_commit_prefix("fix: bug"), Some("fix".to_string()));
-        assert_eq!(
-            extract_commit_prefix("feature(api): add route"),
-            Some("feature".to_string())
-        );
+        assert_eq!(extract_commit_prefix("feature(api): add route"), Some("feature".to_string()));
         assert_eq!(extract_commit_prefix("docs update"), None);
     }
 
     #[test]
     fn normalizes_dotnet_numeric_versions() {
-        assert_eq!(
-            normalize_dotnet_numeric_version("1.2.3.0"),
-            Some("1.2.3".to_string())
-        );
-        assert_eq!(
-            normalize_dotnet_numeric_version("1.2.3"),
-            Some("1.2.3".to_string())
-        );
+        assert_eq!(normalize_dotnet_numeric_version("1.2.3.0"), Some("1.2.3".to_string()));
+        assert_eq!(normalize_dotnet_numeric_version("1.2.3"), Some("1.2.3".to_string()));
         assert_eq!(normalize_dotnet_numeric_version("1.2"), None);
     }
 
     #[test]
     fn excludes_nested_paths() {
-        assert!(is_excluded(
-            Path::new("packages/api/package.json"),
-            &[String::from("packages/api")]
-        ));
-        assert!(!is_excluded(
-            Path::new("packages/web/package.json"),
-            &[String::from("packages/api")]
-        ));
+        assert!(is_excluded(Path::new("packages/api/package.json"), &[String::from("packages/api")]));
+        assert!(!is_excluded(Path::new("packages/web/package.json"), &[String::from("packages/api")]));
     }
 
     #[test]
     fn excludes_glob_patterns() {
-        assert!(is_excluded(
-            Path::new("test/extensions/file.csproj"),
-            &[String::from("test/**")]
-        ));
-        assert!(is_excluded(
-            Path::new("test/filenames/pom.xml"),
-            &[String::from("test/**")]
-        ));
-        assert!(is_excluded(
-            Path::new("test/deep/nested/file.json"),
-            &[String::from("test/*")]
-        ));
-        assert!(!is_excluded(
-            Path::new("src/package.json"),
-            &[String::from("test/**")]
-        ));
+        assert!(is_excluded(Path::new("test/extensions/file.csproj"), &[String::from("test/**")]));
+        assert!(is_excluded(Path::new("test/filenames/pom.xml"), &[String::from("test/**")]));
+        assert!(is_excluded(Path::new("test/deep/nested/file.json"), &[String::from("test/*")]));
+        assert!(!is_excluded(Path::new("src/package.json"), &[String::from("test/**")]));
     }
 }
