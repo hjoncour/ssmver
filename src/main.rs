@@ -790,6 +790,11 @@ fn collect_changelog_inline(version: &str) -> Result<Option<String>> {
 }
 
 fn collect_changelog_editor(template: Option<&str>, version: &str, date: &str, commit_subject: &str) -> Result<Option<String>> {
+    let tty = match OpenOptions::new().read(true).write(true).open("/dev/tty") {
+        Ok(tty) => tty,
+        Err(_) => return Ok(None),
+    };
+
     let prefilled = match template {
         Some(tmpl) => changelog::render_template(tmpl, version, date),
         None       => format!("## {version}\n\n- {commit_subject}\n"),
@@ -802,9 +807,9 @@ fn collect_changelog_editor(template: Option<&str>, version: &str, date: &str, c
     let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
     let status = Command::new(&editor)
         .arg(&tmp_path)
-        .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
+        .stdin(tty.try_clone().context("failed to clone tty for stdin")?)
+        .stdout(tty.try_clone().context("failed to clone tty for stdout")?)
+        .stderr(tty)
         .status();
 
     let status = match status {
@@ -823,11 +828,19 @@ fn collect_changelog_editor(template: Option<&str>, version: &str, date: &str, c
     let content = fs::read_to_string(&tmp_path).context("failed to read edited changelog")?;
     let _ = fs::remove_file(&tmp_path);
 
-    if content.trim().is_empty() || content == prefilled {
+    let cleaned = strip_template_markers(&content);
+    if cleaned.trim().is_empty() {
         return Ok(None);
     }
 
     Ok(Some(content))
+}
+
+fn strip_template_markers(content: &str) -> String {
+    content.lines().filter(|line| {
+        let trimmed = line.trim();
+        !trimmed.starts_with("{{#") && !trimmed.starts_with("{{/") && !trimmed.starts_with("{{.")
+    }).collect::<Vec<_>>().join("\n")
 }
 
 fn append_pending_changelog(repo_root: &Path) -> Result<()> {
