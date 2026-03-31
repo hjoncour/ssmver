@@ -1,3 +1,4 @@
+mod changelog;
 mod config;
 mod git;
 mod hooks;
@@ -18,7 +19,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{compute_next_version, BumpLevel, PromptMode, SsmverConfig},
+    config::{compute_next_version, BumpLevel, ChangelogEditor, PromptMode, SsmverConfig},
     git::{
         ensure_gitignore_has_ssmver, find_main_ref, git_repo_root, log_subjects_since, merge_base,
         project_root_with_config, remove_ssmver_from_gitignore, run_git, set_hooks_path,
@@ -65,6 +66,8 @@ enum Commands {
         command: TargetsCommands,
     },
     Uninstall,
+    /// Enable changelog generation and install default templates
+    Changelog,
     /// Generate a GitHub Actions workflow to create GitHub Releases
     Release,
     /// Generate a GitHub Actions workflow to publish to GitHub Packages
@@ -134,6 +137,7 @@ fn main() -> Result<()> {
         Commands::Config { key, value } => handle_config(&key, value.as_deref()),
         Commands::Targets { command }          => handle_targets(command),
         Commands::Uninstall                                     => handle_uninstall(),
+        Commands::Changelog                                     => handle_changelog(),
         Commands::Release                                       => handle_workflow(WorkflowKind::Release),
         Commands::Package                                       => handle_workflow(WorkflowKind::Package),
         Commands::Npm                                           => handle_workflow(WorkflowKind::Npm),
@@ -375,6 +379,51 @@ fn handle_uninstall() -> Result<()> {
     Ok(())
 }
 
+fn handle_changelog() -> Result<()> {
+    let repo_root = project_root_with_config()?;
+    let config_path = repo_root.join(CONFIG_FILE);
+    let mut config = SsmverConfig::load(&config_path)?;
+
+    let was_enabled = config.changelog.enabled;
+    config.changelog.enabled = true;
+    config.save(&config_path)?;
+
+    if was_enabled {
+        println!("Changelog is already enabled (config refreshed)");
+    } else {
+        println!("Enabled [changelog] in ssmver.toml");
+    }
+
+    let created = changelog::ensure_default_templates()?;
+    let templates_dir = changelog::templates_dir()?;
+    if !created.is_empty() {
+        println!("Created default templates in {}", templates_dir.display());
+        for name in &created {
+            println!("  {name}");
+        }
+    }
+
+    let available = changelog::list_templates()?;
+    if !available.is_empty() {
+        println!("\nAvailable templates:");
+        for name in &available {
+            let marker = if config.changelog.template == *name {"(active)"} else {""};
+            println!("  {name} {marker}");
+        }
+    }
+
+    if config.changelog.template == "none" {
+        println!("\nNo template selected. Set one with: ssmver config changelog.template <name>");
+    } else if let Some(content) = changelog::resolve_template(&config.changelog.template)? {
+        println!("\nActive template preview ({}):", config.changelog.template);
+        for line in content.lines().take(10) {
+            println!("  {line}");
+        }
+    }
+
+    Ok(())
+}
+
 fn handle_workflow(kind: WorkflowKind) -> Result<()> {
     let repo_root = project_root_with_config()?;
     let config_path = repo_root.join(CONFIG_FILE);
@@ -492,10 +541,21 @@ fn handle_hook_prepare_commit_msg(message_file: &Path, source: Option<&str>) -> 
         return Ok(());
     };
 
-    let Some(next_version) = compute_commit_bump_version(&repo_root, &config, level)? else {
-        return Ok(());
+    let version_bumped = if let Some(next_version) = compute_commit_bump_version(&repo_root, &config, level)? {
+        sync_project_version(&repo_root, &config_path, &mut config, next_version, true)?;
+        true
+    } else {
+        false
     };
-    sync_project_version(&repo_root, &config_path, &mut config, next_version, true)?;
+
+    if should_collect_changelog(&config, level) {
+        let changelog_path = repo_root.join("CHANGELOG.md");
+        if version_bumped {
+            collect_and_prepend_changelog(&repo_root, &config, &config.version, &first_line)?;
+        } else if changelog_path.exists() {
+            amend_existing_changelog(&repo_root, &first_line)?;
+        }
+    }
 
     if should_prompt_for_body(&config, &prefix) && !commit_message_has_body(message_file)? {
         prompt_for_commit_body(message_file, &prefix)?;
@@ -674,6 +734,179 @@ fn prompt_for_commit_body(message_file: &Path, prefix: &str) -> Result<()> {
     writeln!(file)?;
     writeln!(file, "{line}")?;
     Ok(())
+}
+
+fn should_collect_changelog(config: &SsmverConfig, level: BumpLevel) -> bool {
+    if !config.changelog.enabled {
+        return false;
+    }
+    if config.changelog.on_bump.is_empty() {
+        return true;
+    }
+    config.changelog.on_bump.contains(&level)
+}
+
+fn collect_and_prepend_changelog(repo_root: &Path, config: &SsmverConfig, version: &Version, commit_subject: &str) -> Result<()> {
+    let version_str = version.to_string();
+    let date = chrono_free_date();
+
+    let entry = match config.changelog.editor {
+        ChangelogEditor::Inline => collect_changelog_inline(&version_str)?,
+        ChangelogEditor::Editor => {
+            let template_content = changelog::resolve_template(&config.changelog.template)?;
+            collect_changelog_editor(template_content.as_deref(), &version_str, &date, commit_subject)?
+        }
+    };
+
+    let Some(entry) = entry else {
+        return Ok(());
+    };
+    if entry.trim().is_empty() {
+        return Ok(());
+    }
+
+    if changelog::prepend_changelog_entry(repo_root, &entry)? {
+        append_pending_changelog(repo_root)?;
+    }
+
+    Ok(())
+}
+
+fn collect_changelog_inline(version: &str) -> Result<Option<String>> {
+    let mut tty_writer = match OpenOptions::new().write(true).open("/dev/tty") {
+        Ok(tty) => tty,
+        Err(_) => return Ok(None),
+    };
+    let tty_reader = match OpenOptions::new().read(true).open("/dev/tty") {
+        Ok(tty) => tty,
+        Err(_) => return Ok(None),
+    };
+
+    write!(tty_writer, "ssmver changelog entry for v{version} (optional): ")?;
+    tty_writer.flush()?;
+
+    let mut line = String::new();
+    let mut reader = BufReader::new(tty_reader);
+    reader.read_line(&mut line)?;
+    let line = line.trim_end();
+    if line.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(format!("## {version}\n\n- {line}\n")))
+}
+
+fn collect_changelog_editor(template: Option<&str>, version: &str, date: &str, commit_subject: &str) -> Result<Option<String>> {
+    let tty = match OpenOptions::new().read(true).write(true).open("/dev/tty") {
+        Ok(tty) => tty,
+        Err(_) => return Ok(None),
+    };
+
+    let prefilled = match template {
+        Some(tmpl) => changelog::render_template(tmpl, version, date),
+        None       => format!("## {version}\n\n- {commit_subject}\n"),
+    };
+
+    let tmp_dir = env::temp_dir();
+    let tmp_path = tmp_dir.join(format!("ssmver-changelog-{version}.md"));
+    fs::write(&tmp_path, &prefilled).context("failed to write temp changelog file")?;
+
+    let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+    let status = Command::new(&editor)
+        .arg(&tmp_path)
+        .stdin(tty.try_clone().context("failed to clone tty for stdin")?)
+        .stdout(tty.try_clone().context("failed to clone tty for stdout")?)
+        .stderr(tty)
+        .status();
+
+    let status = match status {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = fs::remove_file(&tmp_path);
+            return Ok(None);
+        }
+    };
+
+    if !status.success() {
+        let _ = fs::remove_file(&tmp_path);
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&tmp_path).context("failed to read edited changelog")?;
+    let _ = fs::remove_file(&tmp_path);
+
+    let cleaned = strip_template_markers(&content);
+    if cleaned.trim().is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(content))
+}
+
+fn amend_existing_changelog(repo_root: &Path, commit_subject: &str) -> Result<()> {
+    let changelog_path = repo_root.join("CHANGELOG.md");
+    let content = fs::read_to_string(&changelog_path).context("failed to read CHANGELOG.md")?;
+
+    let tty = match OpenOptions::new().read(true).write(true).open("/dev/tty") {
+        Ok(tty) => tty,
+        Err(_) => return Ok(()),
+    };
+
+    let mut tty_writer = tty.try_clone().context("failed to clone tty")?;
+    write!(tty_writer, "ssmver: amending existing changelog entry for this commit ({commit_subject})\n")?;
+    tty_writer.flush()?;
+
+    let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+    let status = Command::new(&editor)
+        .arg(&changelog_path)
+        .stdin(tty.try_clone().context("failed to clone tty for stdin")?)
+        .stdout(tty.try_clone().context("failed to clone tty for stdout")?)
+        .stderr(tty)
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {}
+        _                    => return Ok(()),
+    }
+
+    let updated = fs::read_to_string(&changelog_path).unwrap_or_default();
+    if updated != content {
+        append_pending_changelog(repo_root)?;
+    }
+
+    Ok(())
+}
+
+fn strip_template_markers(content: &str) -> String {
+    content.lines().filter(|line| {
+        let trimmed = line.trim();
+        !trimmed.starts_with("{{#") && !trimmed.starts_with("{{/") && !trimmed.starts_with("{{.")
+    }).collect::<Vec<_>>().join("\n")
+}
+
+fn append_pending_changelog(repo_root: &Path) -> Result<()> {
+    let path = pending_sync_path(repo_root);
+    let mut pending = if path.exists() {
+        let content = fs::read(&path)?;
+        serde_json::from_slice(&content)?
+    } else {
+        fs::create_dir_all(repo_root.join(SSMVER_DIR))?;
+        PendingSync {files: Vec::new()}
+    };
+    let changelog_path = PathBuf::from("CHANGELOG.md");
+    if !pending.files.contains(&changelog_path) {
+        pending.files.push(changelog_path);
+        fs::write(&path, serde_json::to_vec_pretty(&pending)?)?;
+    }
+    Ok(())
+}
+
+fn chrono_free_date() -> String {
+    let output = Command::new("date").arg("+%Y-%m-%d").output();
+    match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _                               => "YYYY-MM-DD".to_string(),
+    }
 }
 
 fn ensure_syncable_targets(targets: &[VersionTarget]) -> Result<()> {

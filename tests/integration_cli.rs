@@ -587,3 +587,60 @@ fn bare_ssmver_runs_status_when_initialized() {
     assert!(output.contains("version: 1.0.0"));
     assert!(output.contains("in sync"));
 }
+
+#[test]
+fn init_creates_config_with_changelog_disabled() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(temp.path().join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n").unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+
+    let config = fs::read_to_string(temp.path().join("ssmver.toml")).unwrap();
+    assert!(config.contains("[changelog]"));
+    assert!(config.contains("enabled = false"));
+    assert!(config.contains("editor = \"editor\""));
+    assert!(config.contains("# Enable changelog entry collection on version bumps"));
+    assert!(config.contains("# How to collect changelog entries"));
+}
+
+#[test]
+fn changelog_enables_section_in_existing_project() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(temp.path().join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n").unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+
+    let config_before = fs::read_to_string(temp.path().join("ssmver.toml")).unwrap();
+    assert!(config_before.contains("enabled = false"));
+
+    let output = assert_success(run_ssmver(temp.path(), &["changelog"]));
+    assert!(output.contains("Enabled [changelog] in ssmver.toml"));
+
+    let config_after = fs::read_to_string(temp.path().join("ssmver.toml")).unwrap();
+    assert!(config_after.contains("[changelog]"));
+    let changelog_section = config_after.split("[changelog]").nth(1).unwrap();
+    assert!(changelog_section.contains("enabled = true"));
+    assert!(config_after.contains("# Enable changelog entry collection on version bumps"));
+    assert!(config_after.contains("# How to collect changelog entries"));
+}
+
+#[test]
+fn changelog_is_idempotent() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(temp.path().join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n").unwrap();
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    assert_success(run_ssmver(temp.path(), &["changelog"]));
+
+    let output = assert_success(run_ssmver(temp.path(), &["changelog"]));
+    assert!(output.contains("Changelog is already enabled"));
+}
