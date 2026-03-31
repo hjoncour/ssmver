@@ -844,11 +844,13 @@ fn strip_template_markers(content: &str) -> String {
 
 fn append_pending_changelog(repo_root: &Path) -> Result<()> {
     let path = pending_sync_path(repo_root);
-    if !path.exists() {
-        return Ok(());
-    }
-    let content = fs::read(&path)?;
-    let mut pending: PendingSync = serde_json::from_slice(&content)?;
+    let mut pending = if path.exists() {
+        let content = fs::read(&path)?;
+        serde_json::from_slice(&content)?
+    } else {
+        fs::create_dir_all(repo_root.join(SSMVER_DIR))?;
+        PendingSync {files: Vec::new()}
+    };
     let changelog_path = PathBuf::from("CHANGELOG.md");
     if !pending.files.contains(&changelog_path) {
         pending.files.push(changelog_path);
