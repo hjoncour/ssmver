@@ -91,6 +91,32 @@ pub fn list_templates() -> Result<Vec<String>> {
     list_templates_at(&ssmver_home()?)
 }
 
+pub fn render_template(template: &str, version: &str, date: &str) -> String {
+    template.replace("{{version}}", version).replace("{{date}}", date)
+}
+
+pub fn prepend_changelog_entry(repo_root: &Path, entry: &str) -> Result<bool> {
+    let path = repo_root.join("CHANGELOG.md");
+    let existing = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).context("failed to read CHANGELOG.md"),
+    };
+
+    let mut content = String::with_capacity(entry.len() + 1 + existing.len());
+    content.push_str(entry);
+    if !entry.ends_with('\n') {
+        content.push('\n');
+    }
+    if !existing.is_empty() {
+        content.push('\n');
+        content.push_str(&existing);
+    }
+
+    fs::write(&path, &content).context("failed to write CHANGELOG.md")?;
+    Ok(true)
+}
+
 fn list_templates_at(base: &Path) -> Result<Vec<String>> {
     let dir = templates_dir_at(base);
     if !dir.exists() {
@@ -174,5 +200,35 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let names = list_templates_at(temp.path()).unwrap();
         assert!(names.is_empty());
+    }
+
+    #[test]
+    fn render_template_substitutes_placeholders() {
+        let tmpl = "## [{{version}}] - {{date}}\n\n- Something\n";
+        let rendered = render_template(tmpl, "1.2.0", "2026-03-31");
+        assert!(rendered.contains("## [1.2.0] - 2026-03-31"));
+    }
+
+    #[test]
+    fn prepend_changelog_entry_creates_new_file() {
+        let temp = TempDir::new().unwrap();
+        let changed = prepend_changelog_entry(temp.path(), "## 1.0.0\n\n- Initial\n").unwrap();
+        assert!(changed);
+        let content = fs::read_to_string(temp.path().join("CHANGELOG.md")).unwrap();
+        assert!(content.starts_with("## 1.0.0"));
+        assert!(content.contains("- Initial"));
+    }
+
+    #[test]
+    fn prepend_changelog_entry_prepends_to_existing() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("CHANGELOG.md"), "## 0.9.0\n\n- Old entry\n").unwrap();
+        prepend_changelog_entry(temp.path(), "## 1.0.0\n\n- New entry\n").unwrap();
+        let content = fs::read_to_string(temp.path().join("CHANGELOG.md")).unwrap();
+        assert!(content.starts_with("## 1.0.0"));
+        assert!(content.contains("## 0.9.0"));
+        let new_pos = content.find("## 1.0.0").unwrap();
+        let old_pos = content.find("## 0.9.0").unwrap();
+        assert!(new_pos < old_pos);
     }
 }

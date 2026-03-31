@@ -601,6 +601,9 @@ fn init_creates_config_with_changelog_disabled() {
     let config = fs::read_to_string(temp.path().join("ssmver.toml")).unwrap();
     assert!(config.contains("[changelog]"));
     assert!(config.contains("enabled = false"));
+    assert!(config.contains("editor = \"editor\""));
+    assert!(config.contains("# Enable changelog entry collection on version bumps"));
+    assert!(config.contains("# How to collect changelog entries"));
 }
 
 #[test]
@@ -621,9 +624,10 @@ fn changelog_enables_section_in_existing_project() {
 
     let config_after = fs::read_to_string(temp.path().join("ssmver.toml")).unwrap();
     assert!(config_after.contains("[changelog]"));
-    // The changelog section should now have enabled = true
     let changelog_section = config_after.split("[changelog]").nth(1).unwrap();
     assert!(changelog_section.contains("enabled = true"));
+    assert!(config_after.contains("# Enable changelog entry collection on version bumps"));
+    assert!(config_after.contains("# How to collect changelog entries"));
 }
 
 #[test]

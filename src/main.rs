@@ -19,7 +19,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{compute_next_version, BumpLevel, PromptMode, SsmverConfig},
+    config::{compute_next_version, BumpLevel, ChangelogEditor, PromptMode, SsmverConfig},
     git::{
         ensure_gitignore_has_ssmver, find_main_ref, git_repo_root, log_subjects_since, merge_base,
         project_root_with_config, remove_ssmver_from_gitignore, run_git, set_hooks_path,
@@ -542,7 +542,11 @@ fn handle_hook_prepare_commit_msg(message_file: &Path, source: Option<&str>) -> 
     let Some(next_version) = compute_commit_bump_version(&repo_root, &config, level)? else {
         return Ok(());
     };
-    sync_project_version(&repo_root, &config_path, &mut config, next_version, true)?;
+    sync_project_version(&repo_root, &config_path, &mut config, next_version.clone(), true)?;
+
+    if should_collect_changelog(&config, level) {
+        collect_and_prepend_changelog(&repo_root, &config, &next_version, &first_line)?;
+    }
 
     if should_prompt_for_body(&config, &prefix) && !commit_message_has_body(message_file)? {
         prompt_for_commit_body(message_file, &prefix)?;
@@ -721,6 +725,130 @@ fn prompt_for_commit_body(message_file: &Path, prefix: &str) -> Result<()> {
     writeln!(file)?;
     writeln!(file, "{line}")?;
     Ok(())
+}
+
+fn should_collect_changelog(config: &SsmverConfig, level: BumpLevel) -> bool {
+    if !config.changelog.enabled {
+        return false;
+    }
+    if config.changelog.on_bump.is_empty() {
+        return true;
+    }
+    config.changelog.on_bump.contains(&level)
+}
+
+fn collect_and_prepend_changelog(repo_root: &Path, config: &SsmverConfig, version: &Version, commit_subject: &str) -> Result<()> {
+    let version_str = version.to_string();
+    let date = chrono_free_date();
+
+    let entry = match config.changelog.editor {
+        ChangelogEditor::Inline => collect_changelog_inline(&version_str)?,
+        ChangelogEditor::Editor => {
+            let template_content = changelog::resolve_template(&config.changelog.template)?;
+            collect_changelog_editor(template_content.as_deref(), &version_str, &date, commit_subject)?
+        }
+    };
+
+    let Some(entry) = entry else {
+        return Ok(());
+    };
+    if entry.trim().is_empty() {
+        return Ok(());
+    }
+
+    if changelog::prepend_changelog_entry(repo_root, &entry)? {
+        append_pending_changelog(repo_root)?;
+    }
+
+    Ok(())
+}
+
+fn collect_changelog_inline(version: &str) -> Result<Option<String>> {
+    let mut tty_writer = match OpenOptions::new().write(true).open("/dev/tty") {
+        Ok(tty) => tty,
+        Err(_) => return Ok(None),
+    };
+    let tty_reader = match OpenOptions::new().read(true).open("/dev/tty") {
+        Ok(tty) => tty,
+        Err(_) => return Ok(None),
+    };
+
+    write!(tty_writer, "ssmver changelog entry for v{version} (optional): ")?;
+    tty_writer.flush()?;
+
+    let mut line = String::new();
+    let mut reader = BufReader::new(tty_reader);
+    reader.read_line(&mut line)?;
+    let line = line.trim_end();
+    if line.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(format!("## {version}\n\n- {line}\n")))
+}
+
+fn collect_changelog_editor(template: Option<&str>, version: &str, date: &str, commit_subject: &str) -> Result<Option<String>> {
+    let prefilled = match template {
+        Some(tmpl) => changelog::render_template(tmpl, version, date),
+        None       => format!("## {version}\n\n- {commit_subject}\n"),
+    };
+
+    let tmp_dir = env::temp_dir();
+    let tmp_path = tmp_dir.join(format!("ssmver-changelog-{version}.md"));
+    fs::write(&tmp_path, &prefilled).context("failed to write temp changelog file")?;
+
+    let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+    let status = Command::new(&editor)
+        .arg(&tmp_path)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status();
+
+    let status = match status {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = fs::remove_file(&tmp_path);
+            return Ok(None);
+        }
+    };
+
+    if !status.success() {
+        let _ = fs::remove_file(&tmp_path);
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&tmp_path).context("failed to read edited changelog")?;
+    let _ = fs::remove_file(&tmp_path);
+
+    if content.trim().is_empty() || content == prefilled {
+        return Ok(None);
+    }
+
+    Ok(Some(content))
+}
+
+fn append_pending_changelog(repo_root: &Path) -> Result<()> {
+    let path = pending_sync_path(repo_root);
+    if !path.exists() {
+        return Ok(());
+    }
+    let content = fs::read(&path)?;
+    let mut pending: PendingSync = serde_json::from_slice(&content)?;
+    let changelog_path = PathBuf::from("CHANGELOG.md");
+    if !pending.files.contains(&changelog_path) {
+        pending.files.push(changelog_path);
+        fs::write(&path, serde_json::to_vec_pretty(&pending)?)?;
+    }
+    Ok(())
+}
+
+fn chrono_free_date() -> String {
+    let output = Command::new("date").arg("+%Y-%m-%d").output();
+    match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _                               => "YYYY-MM-DD".to_string(),
+    }
 }
 
 fn ensure_syncable_targets(targets: &[VersionTarget]) -> Result<()> {

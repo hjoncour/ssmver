@@ -102,6 +102,23 @@ pub struct ReleaseConfig {
     pub skip: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChangelogEditor {
+    Inline,
+    Editor,
+}
+
+impl fmt::Display for ChangelogEditor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Inline    => "inline",
+            Self::Editor    => "editor",
+        };
+        f.write_str(label)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangelogConfig {
     #[serde(default)]
@@ -110,6 +127,8 @@ pub struct ChangelogConfig {
     pub on_bump: Vec<BumpLevel>,
     #[serde(default = "default_changelog_template")]
     pub template: String,
+    #[serde(default = "default_changelog_editor")]
+    pub editor: ChangelogEditor,
 }
 
 impl Default for ChangelogConfig {
@@ -118,6 +137,7 @@ impl Default for ChangelogConfig {
             enabled: false,
             on_bump: Vec::new(),
             template: default_changelog_template(),
+            editor: default_changelog_editor(),
         }
     }
 }
@@ -203,6 +223,7 @@ impl SsmverConfig {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         let raw = toml::to_string_pretty(self).context("failed to serialize config")?;
+        let raw = inject_changelog_comments(&raw);
         fs::write(path, raw).with_context(|| format!("failed to write {}", path.display()))?;
         Ok(())
     }
@@ -223,6 +244,7 @@ impl SsmverConfig {
             "changelog.enabled"     => Ok(self.changelog.enabled.to_string()),
             "changelog.on_bump"     => Ok(self.changelog.on_bump.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(",")),
             "changelog.template"    => Ok(self.changelog.template.clone()),
+            "changelog.editor"      => Ok(self.changelog.editor.to_string()),
             _                       => bail!("Unsupported config key: {key}"),
         }
     }
@@ -290,6 +312,10 @@ impl SsmverConfig {
                 self.changelog.template = raw_value.trim().to_string();
                 Ok(format!("Set changelog.template = \"{}\"", self.changelog.template))
             }
+            "changelog.editor" => {
+                self.changelog.editor = parse_changelog_editor(raw_value)?;
+                Ok(format!("Set changelog.editor = \"{}\"", self.changelog.editor))
+            }
             _ => bail!("Unsupported config key: {key}"),
         }
     }
@@ -336,6 +362,7 @@ fn normalize_key(key: &str) -> &str {
         "changelog.enabled"         => "changelog.enabled",
         "changelog.on_bump"         => "changelog.on_bump",
         "changelog.template"        => "changelog.template",
+        "changelog.editor"          => "changelog.editor",
         other                       => other,
     }
 }
@@ -410,6 +437,44 @@ fn render_string_array(values: &[String]) -> String {
     format!("[{body}]")
 }
 
+fn inject_changelog_comments(raw: &str) -> String {
+    let changelog_comments: &[(&str, &str)] = &[
+        ("enabled =",  "# Enable changelog entry collection on version bumps"),
+        ("on_bump =",  "# Which bump levels trigger changelog collection (empty = all)\n# Example: [\"minor\", \"major\"]"),
+        ("template =", "# Template name from ~/.ssmver/templates/changelog/ or \"none\""),
+        ("editor =",   "# How to collect changelog entries: \"inline\" (terminal prompt) or \"editor\" ($EDITOR)"),
+    ];
+
+    let mut result = String::with_capacity(raw.len() + 256);
+    let mut in_changelog = false;
+    for line in raw.lines() {
+        if line.trim() == "[changelog]" {
+            in_changelog = true;
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+        if in_changelog && line.starts_with('[') {
+            in_changelog = false;
+        }
+        if in_changelog {
+            let trimmed = line.trim();
+            for (key, comment) in changelog_comments {
+                if trimmed.starts_with(key) {
+                    for comment_line in comment.lines() {
+                        result.push_str(comment_line);
+                        result.push('\n');
+                    }
+                    break;
+                }
+            }
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+    result
+}
+
 fn default_version() -> Version {
     Version::new(0, 1, 0)
 }
@@ -436,6 +501,18 @@ fn default_constants_mode() -> ConstantsMode {
 
 fn default_changelog_template() -> String {
     "none".to_string()
+}
+
+fn default_changelog_editor() -> ChangelogEditor {
+    ChangelogEditor::Editor
+}
+
+fn parse_changelog_editor(value: &str) -> Result<ChangelogEditor> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "inline"    => Ok(ChangelogEditor::Inline),
+        "editor"    => Ok(ChangelogEditor::Editor),
+        _           => bail!("changelog.editor must be one of: inline, editor"),
+    }
 }
 
 fn default_prefixes() -> BTreeMap<String, BumpLevel> {
@@ -479,6 +556,7 @@ mod tests {
         assert!(!config.changelog.enabled);
         assert!(config.changelog.on_bump.is_empty());
         assert_eq!(config.changelog.template, "none");
+        assert_eq!(config.changelog.editor, ChangelogEditor::Editor);
     }
 
     #[test]
@@ -487,10 +565,26 @@ mod tests {
         config.changelog.enabled = true;
         config.changelog.on_bump = vec![BumpLevel::Minor, BumpLevel::Major];
         config.changelog.template = "keepachangelog".to_string();
+        config.changelog.editor = ChangelogEditor::Inline;
         let raw = toml::to_string_pretty(&config).unwrap();
         let parsed: SsmverConfig = toml::from_str(&raw).unwrap();
         assert!(parsed.changelog.enabled);
         assert_eq!(parsed.changelog.on_bump, vec![BumpLevel::Minor, BumpLevel::Major]);
         assert_eq!(parsed.changelog.template, "keepachangelog");
+        assert_eq!(parsed.changelog.editor, ChangelogEditor::Inline);
+    }
+
+    #[test]
+    fn save_injects_changelog_comments() {
+        let config = SsmverConfig::default();
+        let raw = toml::to_string_pretty(&config).unwrap();
+        let commented = inject_changelog_comments(&raw);
+        assert!(commented.contains("# Enable changelog entry collection on version bumps"));
+        assert!(commented.contains("# Which bump levels trigger changelog collection"));
+        assert!(commented.contains("# Template name from ~/.ssmver/templates/changelog/"));
+        assert!(commented.contains("# How to collect changelog entries"));
+        // Comments are preserved through re-parse
+        let reparsed: SsmverConfig = toml::from_str(&commented).unwrap();
+        assert_eq!(reparsed.changelog.enabled, config.changelog.enabled);
     }
 }
