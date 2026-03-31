@@ -541,12 +541,20 @@ fn handle_hook_prepare_commit_msg(message_file: &Path, source: Option<&str>) -> 
         return Ok(());
     };
 
-    if let Some(next_version) = compute_commit_bump_version(&repo_root, &config, level)? {
+    let version_bumped = if let Some(next_version) = compute_commit_bump_version(&repo_root, &config, level)? {
         sync_project_version(&repo_root, &config_path, &mut config, next_version, true)?;
-    }
+        true
+    } else {
+        false
+    };
 
     if should_collect_changelog(&config, level) {
-        collect_and_prepend_changelog(&repo_root, &config, &config.version, &first_line)?;
+        let changelog_path = repo_root.join("CHANGELOG.md");
+        if version_bumped {
+            collect_and_prepend_changelog(&repo_root, &config, &config.version, &first_line)?;
+        } else if changelog_path.exists() {
+            amend_existing_changelog(&repo_root, &first_line)?;
+        }
     }
 
     if should_prompt_for_body(&config, &prefix) && !commit_message_has_body(message_file)? {
@@ -833,6 +841,40 @@ fn collect_changelog_editor(template: Option<&str>, version: &str, date: &str, c
     }
 
     Ok(Some(content))
+}
+
+fn amend_existing_changelog(repo_root: &Path, commit_subject: &str) -> Result<()> {
+    let changelog_path = repo_root.join("CHANGELOG.md");
+    let content = fs::read_to_string(&changelog_path).context("failed to read CHANGELOG.md")?;
+
+    let tty = match OpenOptions::new().read(true).write(true).open("/dev/tty") {
+        Ok(tty) => tty,
+        Err(_) => return Ok(()),
+    };
+
+    let mut tty_writer = tty.try_clone().context("failed to clone tty")?;
+    write!(tty_writer, "ssmver: amending existing changelog entry for this commit ({commit_subject})\n")?;
+    tty_writer.flush()?;
+
+    let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+    let status = Command::new(&editor)
+        .arg(&changelog_path)
+        .stdin(tty.try_clone().context("failed to clone tty for stdin")?)
+        .stdout(tty.try_clone().context("failed to clone tty for stdout")?)
+        .stderr(tty)
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {}
+        _                    => return Ok(()),
+    }
+
+    let updated = fs::read_to_string(&changelog_path).unwrap_or_default();
+    if updated != content {
+        append_pending_changelog(repo_root)?;
+    }
+
+    Ok(())
 }
 
 fn strip_template_markers(content: &str) -> String {
