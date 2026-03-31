@@ -25,6 +25,12 @@ match = ""
 skip = ""
 
 [changelog]
+# Enable changelog entry collection on version bumps
 enabled = true
+# Which bump levels trigger changelog collection (empty = all)
+# Example: ["minor", "major"]
 on_bump = []
+# Template name from ~/.ssmver/templates/changelog/ or "none"
 template = "conventional"
+# How to collect changelog entries: "inline" (terminal prompt) or "editor" ($EDITOR)
+editor = "editor"

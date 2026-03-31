@@ -384,12 +384,14 @@ fn handle_changelog() -> Result<()> {
     let config_path = repo_root.join(CONFIG_FILE);
     let mut config = SsmverConfig::load(&config_path)?;
 
-    if !config.changelog.enabled {
-        config.changelog.enabled = true;
-        config.save(&config_path)?;
-        println!("Enabled [changelog] in ssmver.toml");
+    let was_enabled = config.changelog.enabled;
+    config.changelog.enabled = true;
+    config.save(&config_path)?;
+
+    if was_enabled {
+        println!("Changelog is already enabled (config refreshed)");
     } else {
-        println!("Changelog is already enabled");
+        println!("Enabled [changelog] in ssmver.toml");
     }
 
     let created = changelog::ensure_default_templates()?;
