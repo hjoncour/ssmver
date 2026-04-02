@@ -139,7 +139,7 @@ The `ssmver package` command supports ecosystems that have a GitHub Packages reg
 
 ### Workflow triggers
 
-Generated workflows trigger on push to the detected main branch (whichever of `main` or `master` exists in the repo). They only proceed when the version in `ssmver.toml` changed compared to the previous commit.
+Generated workflows trigger on push to the detected main branch (whichever of `main` or `master` exists in the repo). They compare the current `ssmver.toml` version to the branch tip from before the push, so merged PRs with multiple commits still release correctly. If the previous branch tip had no `ssmver.toml`, the current version is treated as the initial release.
 
 ### Release conditions
 
