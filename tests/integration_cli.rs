@@ -564,7 +564,11 @@ fn status_detects_drift() {
 
     let output = run_ssmver(temp.path(), &["status"]);
     assert!(!output.status.success());
-    let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(text.contains("Out of sync"));
     assert!(text.contains("9.9.9"));
     assert!(text.contains("expected 1.0.0"));
@@ -592,7 +596,11 @@ fn bare_ssmver_runs_status_when_initialized() {
 fn init_creates_config_with_changelog_disabled() {
     let temp = TempDir::new().unwrap();
     init_git_repo(temp.path());
-    fs::write(temp.path().join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n").unwrap();
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
     fs::create_dir_all(temp.path().join("src")).unwrap();
     fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
 
@@ -610,7 +618,11 @@ fn init_creates_config_with_changelog_disabled() {
 fn changelog_enables_section_in_existing_project() {
     let temp = TempDir::new().unwrap();
     init_git_repo(temp.path());
-    fs::write(temp.path().join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n").unwrap();
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
     fs::create_dir_all(temp.path().join("src")).unwrap();
     fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
 
@@ -634,7 +646,11 @@ fn changelog_enables_section_in_existing_project() {
 fn changelog_is_idempotent() {
     let temp = TempDir::new().unwrap();
     init_git_repo(temp.path());
-    fs::write(temp.path().join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n").unwrap();
+    fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
     fs::create_dir_all(temp.path().join("src")).unwrap();
     fs::write(temp.path().join("src/main.rs"), "fn main() {}\n").unwrap();
 
@@ -643,4 +659,88 @@ fn changelog_is_idempotent() {
 
     let output = assert_success(run_ssmver(temp.path(), &["changelog"]));
     assert!(output.contains("Changelog is already enabled"));
+}
+
+#[test]
+fn marketplace_generates_workflow_for_vscode_extension() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("package.json"),
+        r#"{
+  "name": "my-ext",
+  "version": "0.1.0",
+  "publisher": "test-publisher",
+  "engines": { "vscode": "^1.80.0" }
+}"#,
+    )
+    .unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+
+    let targets_output = assert_success(run_ssmver(temp.path(), &["targets", "list", "--json"]));
+    assert!(targets_output.contains("\"vscode\""));
+
+    let output = assert_success(run_ssmver(temp.path(), &["marketplace"]));
+    assert!(output.contains("Generated .github/workflows/marketplace.yaml"));
+    assert!(output.contains("VSCE_PAT"));
+    assert!(output.contains("OVSX_TOKEN"));
+
+    let workflow =
+        fs::read_to_string(temp.path().join(".github/workflows/marketplace.yaml")).unwrap();
+    assert!(workflow.contains("@vscode/vsce package"));
+    assert!(workflow.contains("@vscode/vsce publish"));
+    assert!(workflow.contains("ovsx publish"));
+}
+
+#[test]
+fn marketplace_fails_without_vscode_extension() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("package.json"),
+        "{\n  \"name\": \"demo\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    let output = assert_failure(run_ssmver(temp.path(), &["marketplace"]));
+    assert!(output.contains("No VSCode targets found"));
+}
+
+#[test]
+fn vscode_extension_detected_as_vscode_ecosystem() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("package.json"),
+        r#"{
+  "name": "my-ext",
+  "version": "1.2.3",
+  "publisher": "test-publisher",
+  "engines": { "vscode": "^1.80.0" }
+}"#,
+    )
+    .unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    let output = assert_success(run_ssmver(temp.path(), &["targets", "list", "--json"]));
+    assert!(output.contains("\"vscode\""));
+    assert!(!output.contains("\"node\""));
+}
+
+#[test]
+fn plain_node_project_not_detected_as_vscode() {
+    let temp = TempDir::new().unwrap();
+    init_git_repo(temp.path());
+    fs::write(
+        temp.path().join("package.json"),
+        "{\n  \"name\": \"demo\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .unwrap();
+
+    assert_success(run_ssmver(temp.path(), &["init"]));
+    let output = assert_success(run_ssmver(temp.path(), &["targets", "list", "--json"]));
+    assert!(output.contains("\"node\""));
+    assert!(!output.contains("\"vscode\""));
 }

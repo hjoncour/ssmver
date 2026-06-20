@@ -138,7 +138,11 @@ where
         .with_context(|| format!("failed to run `git {}`", args_vec.join(" ")))?;
 
     if !output.status.success() {
-        bail!("git {} failed: {}", args_vec.join(" "), String::from_utf8_lossy(&output.stderr).trim());
+        bail!(
+            "git {} failed: {}",
+            args_vec.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
 
     Ok(())
@@ -212,7 +216,11 @@ pub fn log_subjects_since(repo_root: &Path, revision_range: &str) -> Result<Vec<
     }
 }
 
-pub fn show_file_at_rev(repo_root: &Path, revision: &str, relative_path: &Path) -> Result<Option<String>> {
+pub fn show_file_at_rev(
+    repo_root: &Path,
+    revision: &str,
+    relative_path: &Path,
+) -> Result<Option<String>> {
     let spec = format!("{revision}:{}", relative_path.to_string_lossy());
     try_git_output(repo_root, ["show", &spec])
 }

@@ -76,6 +76,8 @@ enum Commands {
     Npm,
     /// Generate a GitHub Actions workflow to publish to crates.io
     Crates,
+    /// Generate a GitHub Actions workflow to publish a VSCode extension to VS Marketplace and Open VSX
+    Marketplace,
     #[command(hide = true)]
     Hook {
         #[command(subcommand)]
@@ -120,7 +122,11 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let command = cli.command.unwrap_or_else(|| {
-        if git_repo_root().ok().map(|r| r.join(CONFIG_FILE).is_file()).unwrap_or(false) {
+        if git_repo_root()
+            .ok()
+            .map(|r| r.join(CONFIG_FILE).is_file())
+            .unwrap_or(false)
+        {
             Commands::Status
         } else {
             Commands::Init
@@ -128,21 +134,22 @@ fn main() -> Result<()> {
     });
 
     match command {
-        Commands::Init                                          => handle_init(),
-        Commands::Status                                        => handle_status(),
-        Commands::Update                                        => handle_update(),
-        Commands::Prefix { command }            => handle_prefix(command),
-        Commands::Bump { level }                     => handle_bump(level),
-        Commands::Version                                       => handle_version(),
+        Commands::Init => handle_init(),
+        Commands::Status => handle_status(),
+        Commands::Update => handle_update(),
+        Commands::Prefix { command } => handle_prefix(command),
+        Commands::Bump { level } => handle_bump(level),
+        Commands::Version => handle_version(),
         Commands::Config { key, value } => handle_config(&key, value.as_deref()),
-        Commands::Targets { command }          => handle_targets(command),
-        Commands::Uninstall                                     => handle_uninstall(),
-        Commands::Changelog                                     => handle_changelog(),
-        Commands::Release                                       => handle_workflow(WorkflowKind::Release),
-        Commands::Package                                       => handle_workflow(WorkflowKind::Package),
-        Commands::Npm                                           => handle_workflow(WorkflowKind::Npm),
-        Commands::Crates                                        => handle_workflow(WorkflowKind::Crates),
-        Commands::Hook { command }                => handle_hook(command),
+        Commands::Targets { command } => handle_targets(command),
+        Commands::Uninstall => handle_uninstall(),
+        Commands::Changelog => handle_changelog(),
+        Commands::Release => handle_workflow(WorkflowKind::Release),
+        Commands::Package => handle_workflow(WorkflowKind::Package),
+        Commands::Npm => handle_workflow(WorkflowKind::Npm),
+        Commands::Crates => handle_workflow(WorkflowKind::Crates),
+        Commands::Marketplace => handle_workflow(WorkflowKind::Marketplace),
+        Commands::Hook { command } => handle_hook(command),
     }
 }
 
@@ -156,11 +163,15 @@ fn handle_init() -> Result<()> {
     } else {
         let detected_targets = discover_targets(&repo_root, &SsmverConfig::default().sync)?;
         ensure_syncable_targets(&detected_targets)?;
-        let initial_version = infer_seed_version(&detected_targets)?.unwrap_or_else(|| Version::new(0, 1, 0));
+        let initial_version =
+            infer_seed_version(&detected_targets)?.unwrap_or_else(|| Version::new(0, 1, 0));
         let mut config = SsmverConfig::default();
         config.version = initial_version.clone();
         config.save(&config_path)?;
-        summary.push(format!("Created ssmver.toml at version {}", initial_version));
+        summary.push(format!(
+            "Created ssmver.toml at version {}",
+            initial_version
+        ));
     }
 
     for line in summary {
@@ -186,11 +197,22 @@ fn handle_status() -> Result<()> {
                 if target.current_version.as_deref() == Some(expected.as_str()) {
                     ok_count += 1;
                 } else {
-                    drift.push(format!("  {} ({:?}): {} (expected {})", target.path.display(), target.target_kind, target.current_version.as_deref().unwrap_or("-"), expected));
+                    drift.push(format!(
+                        "  {} ({:?}): {} (expected {})",
+                        target.path.display(),
+                        target.target_kind,
+                        target.current_version.as_deref().unwrap_or("-"),
+                        expected
+                    ));
                 }
             }
             _ => {
-                issues.push(format!("  {} ({:?}): {}", target.path.display(), target.target_kind, target.detail.as_deref().unwrap_or("skipped")));
+                issues.push(format!(
+                    "  {} ({:?}): {}",
+                    target.path.display(),
+                    target.target_kind,
+                    target.detail.as_deref().unwrap_or("skipped")
+                ));
             }
         }
     }
@@ -234,11 +256,21 @@ fn handle_update() -> Result<()> {
     let mut config = SsmverConfig::load(&config_path)?;
     let current_version = config.version.clone();
     let mut summary = install_or_refresh_repo(&repo_root)?;
-    let changed_files = sync_project_version(&repo_root, &config_path, &mut config, current_version, false)?;
+    let changed_files = sync_project_version(
+        &repo_root,
+        &config_path,
+        &mut config,
+        current_version,
+        false,
+    )?;
     if changed_files.is_empty() {
         summary.push("Versioned files were already in sync".to_string());
     } else {
-        summary.push(format!("Re-synced {} file(s) to version {}", changed_files.len(), config.version));
+        summary.push(format!(
+            "Re-synced {} file(s) to version {}",
+            changed_files.len(),
+            config.version
+        ));
     }
 
     for line in summary {
@@ -307,7 +339,13 @@ fn handle_config(key: &str, value: Option<&str>) -> Result<()> {
         Some(raw_value) => {
             if key == "version" || key == "settings.version" {
                 let new_version: Version = raw_value.parse()?;
-                sync_project_version(&repo_root, &config_path, &mut config, new_version.clone(), false)?;
+                sync_project_version(
+                    &repo_root,
+                    &config_path,
+                    &mut config,
+                    new_version.clone(),
+                    false,
+                )?;
                 println!("Set version = \"{}\"", new_version);
             } else {
                 let message = config.set_config_value(key, raw_value)?;
@@ -407,7 +445,11 @@ fn handle_changelog() -> Result<()> {
     if !available.is_empty() {
         println!("\nAvailable templates:");
         for name in &available {
-            let marker = if config.changelog.template == *name {"(active)"} else {""};
+            let marker = if config.changelog.template == *name {
+                "(active)"
+            } else {
+                ""
+            };
             println!("  {name} {marker}");
         }
     }
@@ -440,6 +482,10 @@ fn handle_workflow(kind: WorkflowKind) -> Result<()> {
             require_ecosystem(&targets, Ecosystem::Cargo, "crates")?;
             None
         }
+        WorkflowKind::Marketplace => {
+            require_ecosystem(&targets, Ecosystem::Vscode, "marketplace")?;
+            None
+        }
         WorkflowKind::Package => Some(resolve_package_ecosystem(&targets)?),
     };
 
@@ -453,10 +499,13 @@ fn handle_workflow(kind: WorkflowKind) -> Result<()> {
     }
 
     let yaml = match kind {
-        WorkflowKind::Release  => workflows::release_workflow(&config.release, branch),
-        WorkflowKind::Npm      => workflows::npm_workflow(&config.release, branch),
-        WorkflowKind::Crates   => workflows::crates_workflow(&config.release, branch),
-        WorkflowKind::Package  => workflows::package_workflow(&config.release, branch, package_ecosystem.unwrap()),
+        WorkflowKind::Release => workflows::release_workflow(&config.release, branch),
+        WorkflowKind::Npm => workflows::npm_workflow(&config.release, branch),
+        WorkflowKind::Crates => workflows::crates_workflow(&config.release, branch),
+        WorkflowKind::Marketplace => workflows::marketplace_workflow(&config.release, branch),
+        WorkflowKind::Package => {
+            workflows::package_workflow(&config.release, branch, package_ecosystem.unwrap())
+        }
     };
 
     let workflows_dir = repo_root.join(".github").join("workflows");
@@ -464,7 +513,11 @@ fn handle_workflow(kind: WorkflowKind) -> Result<()> {
 
     let file_name = workflows::workflow_file_name(kind);
     let file_path = workflows_dir.join(file_name);
-    let verb = if file_path.exists() {"Overwrote"} else {"Generated"};
+    let verb = if file_path.exists() {
+        "Overwrote"
+    } else {
+        "Generated"
+    };
     fs::write(&file_path, &yaml).with_context(|| format!("writing {}", file_path.display()))?;
 
     let relative = file_path.strip_prefix(&repo_root).unwrap_or(&file_path);
@@ -473,6 +526,9 @@ fn handle_workflow(kind: WorkflowKind) -> Result<()> {
     match kind {
         WorkflowKind::Npm => println!("Add NPM_TOKEN to your repository secrets"),
         WorkflowKind::Crates => println!("Add CARGO_REGISTRY_TOKEN to your repository secrets"),
+        WorkflowKind::Marketplace => {
+            println!("Add VSCE_PAT and OVSX_TOKEN to your repository secrets")
+        }
         _ => {}
     }
 
@@ -480,20 +536,45 @@ fn handle_workflow(kind: WorkflowKind) -> Result<()> {
 }
 
 fn require_ecosystem(targets: &[VersionTarget], ecosystem: Ecosystem, command: &str) -> Result<()> {
-    if !targets.iter().any(|t| t.ecosystem == ecosystem && t.status == TargetStatus::Managed) {
+    if !targets
+        .iter()
+        .any(|t| t.ecosystem == ecosystem && t.status == TargetStatus::Managed)
+    {
         bail!("No {ecosystem} targets found. `ssmver {command}` requires a {ecosystem} project.");
     }
     Ok(())
 }
 
 fn resolve_package_ecosystem(targets: &[VersionTarget]) -> Result<Ecosystem> {
-    let supported: Vec<Ecosystem> = GITHUB_PACKAGES_ECOSYSTEMS.iter().copied().filter(|eco| targets.iter().any(|t| t.ecosystem == *eco && t.status == TargetStatus::Managed)).collect();
+    let supported: Vec<Ecosystem> = GITHUB_PACKAGES_ECOSYSTEMS
+        .iter()
+        .copied()
+        .filter(|eco| {
+            targets
+                .iter()
+                .any(|t| t.ecosystem == *eco && t.status == TargetStatus::Managed)
+        })
+        .collect();
     if supported.is_empty() {
-        let names: Vec<String> = GITHUB_PACKAGES_ECOSYSTEMS.iter().map(|e| e.to_string()).collect();
-        bail!("No ecosystem supporting GitHub Packages found. Supported: {}", names.join(", "));
+        let names: Vec<String> = GITHUB_PACKAGES_ECOSYSTEMS
+            .iter()
+            .map(|e| e.to_string())
+            .collect();
+        bail!(
+            "No ecosystem supporting GitHub Packages found. Supported: {}",
+            names.join(", ")
+        );
     }
     if supported.len() > 1 {
-        println!("Multiple ecosystems support GitHub Packages: {}. Using {}.", supported.iter().map(|e| e.to_string()).collect::<Vec<_>>().join(", "), supported[0]);
+        println!(
+            "Multiple ecosystems support GitHub Packages: {}. Using {}.",
+            supported
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            supported[0]
+        );
     }
     Ok(supported[0])
 }
@@ -503,7 +584,7 @@ fn handle_hook(command: HookCommands) -> Result<()> {
         HookCommands::PrepareCommitMsg {
             message_file,
             source,
-            commit_sha: _
+            commit_sha: _,
         } => handle_hook_prepare_commit_msg(&message_file, source.as_deref()),
         HookCommands::PostCommit => handle_hook_post_commit(),
     }
@@ -541,12 +622,13 @@ fn handle_hook_prepare_commit_msg(message_file: &Path, source: Option<&str>) -> 
         return Ok(());
     };
 
-    let version_bumped = if let Some(next_version) = compute_commit_bump_version(&repo_root, &config, level)? {
-        sync_project_version(&repo_root, &config_path, &mut config, next_version, true)?;
-        true
-    } else {
-        false
-    };
+    let version_bumped =
+        if let Some(next_version) = compute_commit_bump_version(&repo_root, &config, level)? {
+            sync_project_version(&repo_root, &config_path, &mut config, next_version, true)?;
+            true
+        } else {
+            false
+        };
 
     if should_collect_changelog(&config, level) {
         let changelog_path = repo_root.join("CHANGELOG.md");
@@ -583,7 +665,14 @@ fn handle_hook_post_commit() -> Result<()> {
     }
 
     for file in &pending.files {
-        run_git(&repo_root, ["add".to_string(), "--".to_string(), file.to_string_lossy().into_owned()])?;
+        run_git(
+            &repo_root,
+            [
+                "add".to_string(),
+                "--".to_string(),
+                file.to_string_lossy().into_owned(),
+            ],
+        )?;
     }
 
     if !has_cached_changes_for_paths(&repo_root, &pending.files)? {
@@ -606,7 +695,13 @@ fn handle_hook_post_commit() -> Result<()> {
     Ok(())
 }
 
-fn sync_project_version(repo_root: &Path, config_path: &Path, config: &mut SsmverConfig, new_version: Version, persist_pending: bool) -> Result<Vec<PathBuf>> {
+fn sync_project_version(
+    repo_root: &Path,
+    config_path: &Path,
+    config: &mut SsmverConfig,
+    new_version: Version,
+    persist_pending: bool,
+) -> Result<Vec<PathBuf>> {
     let targets = discover_targets(repo_root, &config.sync)?;
     ensure_syncable_targets(&targets)?;
 
@@ -639,11 +734,18 @@ fn install_or_refresh_repo(repo_root: &Path) -> Result<Vec<String>> {
         .context("failed to canonicalize current ssmver binary path")?;
 
     let mut summary = Vec::new();
-    fs::create_dir_all(&hooks_dir).with_context(|| format!("failed to create {}", hooks_dir.display()))?;
+    fs::create_dir_all(&hooks_dir)
+        .with_context(|| format!("failed to create {}", hooks_dir.display()))?;
     summary.push(format!("Ensured {}", install_root.display()));
 
-    write_executable(&hooks_dir.join("prepare-commit-msg"), &hooks::prepare_commit_msg_script(&binary_path))?;
-    write_executable(&hooks_dir.join("post-commit"), &hooks::post_commit_script(&binary_path))?;
+    write_executable(
+        &hooks_dir.join("prepare-commit-msg"),
+        &hooks::prepare_commit_msg_script(&binary_path),
+    )?;
+    write_executable(
+        &hooks_dir.join("post-commit"),
+        &hooks::post_commit_script(&binary_path),
+    )?;
     summary.push("Generated hook wrappers".to_string());
     set_hooks_path(repo_root)?;
     summary.push("Set git core.hooksPath to .ssmver/hooks".to_string());
@@ -657,10 +759,14 @@ fn install_or_refresh_repo(repo_root: &Path) -> Result<Vec<String>> {
     Ok(summary)
 }
 
-fn compute_commit_bump_version(repo_root: &Path, config: &SsmverConfig, level: BumpLevel) -> Result<Option<Version>> {
+fn compute_commit_bump_version(
+    repo_root: &Path,
+    config: &SsmverConfig,
+    level: BumpLevel,
+) -> Result<Option<Version>> {
     match config.settings.mode {
-        config::Mode::All       => Ok(Some(compute_next_version(&config.version, level))),
-        config::Mode::Branch    => {
+        config::Mode::All => Ok(Some(compute_next_version(&config.version, level))),
+        config::Mode::Branch => {
             let Some(main_ref) = find_main_ref(repo_root)? else {
                 return Ok(Some(compute_next_version(&config.version, level)));
             };
@@ -674,7 +780,12 @@ fn compute_commit_bump_version(repo_root: &Path, config: &SsmverConfig, level: B
             }
 
             let base_version = show_file_at_rev(repo_root, &base, Path::new(CONFIG_FILE))?
-                .and_then(|content| {SsmverConfig::from_str(&content).ok().map(|config| config.version)}).unwrap_or_else(|| config.version.clone());
+                .and_then(|content| {
+                    SsmverConfig::from_str(&content)
+                        .ok()
+                        .map(|config| config.version)
+                })
+                .unwrap_or_else(|| config.version.clone());
             Ok(Some(compute_next_version(&base_version, level)))
         }
     }
@@ -698,9 +809,13 @@ fn bump_priority(level: BumpLevel) -> u8 {
 
 fn should_prompt_for_body(config: &SsmverConfig, prefix: &str) -> bool {
     match config.settings.prompt {
-        PromptMode::Never   => false,
-        PromptMode::Always  => true,
-        PromptMode::Ask     => config.settings.prompt_prefixes.iter().any(|candidate| candidate == prefix)
+        PromptMode::Never => false,
+        PromptMode::Always => true,
+        PromptMode::Ask => config
+            .settings
+            .prompt_prefixes
+            .iter()
+            .any(|candidate| candidate == prefix),
     }
 }
 
@@ -712,14 +827,17 @@ fn commit_message_has_body(message_file: &Path) -> Result<bool> {
 fn prompt_for_commit_body(message_file: &Path, prefix: &str) -> Result<()> {
     let mut tty_writer = match OpenOptions::new().write(true).open("/dev/tty") {
         Ok(tty) => tty,
-        Err(_) => return Ok(())
+        Err(_) => return Ok(()),
     };
     let tty_reader = match OpenOptions::new().read(true).open("/dev/tty") {
         Ok(tty) => tty,
-        Err(_) => return Ok(())
+        Err(_) => return Ok(()),
     };
 
-    write!(tty_writer, "ssmver description for {prefix} commit (optional): ")?;
+    write!(
+        tty_writer,
+        "ssmver description for {prefix} commit (optional): "
+    )?;
     tty_writer.flush()?;
 
     let mut line = String::new();
@@ -746,7 +864,12 @@ fn should_collect_changelog(config: &SsmverConfig, level: BumpLevel) -> bool {
     config.changelog.on_bump.contains(&level)
 }
 
-fn collect_and_prepend_changelog(repo_root: &Path, config: &SsmverConfig, version: &Version, commit_subject: &str) -> Result<()> {
+fn collect_and_prepend_changelog(
+    repo_root: &Path,
+    config: &SsmverConfig,
+    version: &Version,
+    commit_subject: &str,
+) -> Result<()> {
     let version_str = version.to_string();
     let date = chrono_free_date();
 
@@ -754,7 +877,12 @@ fn collect_and_prepend_changelog(repo_root: &Path, config: &SsmverConfig, versio
         ChangelogEditor::Inline => collect_changelog_inline(&version_str)?,
         ChangelogEditor::Editor => {
             let template_content = changelog::resolve_template(&config.changelog.template)?;
-            collect_changelog_editor(template_content.as_deref(), &version_str, &date, commit_subject)?
+            collect_changelog_editor(
+                template_content.as_deref(),
+                &version_str,
+                &date,
+                commit_subject,
+            )?
         }
     };
 
@@ -782,7 +910,10 @@ fn collect_changelog_inline(version: &str) -> Result<Option<String>> {
         Err(_) => return Ok(None),
     };
 
-    write!(tty_writer, "ssmver changelog entry for v{version} (optional): ")?;
+    write!(
+        tty_writer,
+        "ssmver changelog entry for v{version} (optional): "
+    )?;
     tty_writer.flush()?;
 
     let mut line = String::new();
@@ -796,7 +927,12 @@ fn collect_changelog_inline(version: &str) -> Result<Option<String>> {
     Ok(Some(format!("## {version}\n\n- {line}\n")))
 }
 
-fn collect_changelog_editor(template: Option<&str>, version: &str, date: &str, commit_subject: &str) -> Result<Option<String>> {
+fn collect_changelog_editor(
+    template: Option<&str>,
+    version: &str,
+    date: &str,
+    commit_subject: &str,
+) -> Result<Option<String>> {
     let tty = match OpenOptions::new().read(true).write(true).open("/dev/tty") {
         Ok(tty) => tty,
         Err(_) => return Ok(None),
@@ -804,7 +940,7 @@ fn collect_changelog_editor(template: Option<&str>, version: &str, date: &str, c
 
     let prefilled = match template {
         Some(tmpl) => changelog::render_template(tmpl, version, date),
-        None       => format!("## {version}\n\n- {commit_subject}\n"),
+        None => format!("## {version}\n\n- {commit_subject}\n"),
     };
 
     let tmp_dir = env::temp_dir();
@@ -853,7 +989,10 @@ fn amend_existing_changelog(repo_root: &Path, commit_subject: &str) -> Result<()
     };
 
     let mut tty_writer = tty.try_clone().context("failed to clone tty")?;
-    write!(tty_writer, "ssmver: amending existing changelog entry for this commit ({commit_subject})\n")?;
+    write!(
+        tty_writer,
+        "ssmver: amending existing changelog entry for this commit ({commit_subject})\n"
+    )?;
     tty_writer.flush()?;
 
     let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
@@ -866,7 +1005,7 @@ fn amend_existing_changelog(repo_root: &Path, commit_subject: &str) -> Result<()
 
     match status {
         Ok(s) if s.success() => {}
-        _                    => return Ok(()),
+        _ => return Ok(()),
     }
 
     let updated = fs::read_to_string(&changelog_path).unwrap_or_default();
@@ -878,10 +1017,16 @@ fn amend_existing_changelog(repo_root: &Path, commit_subject: &str) -> Result<()
 }
 
 fn strip_template_markers(content: &str) -> String {
-    content.lines().filter(|line| {
-        let trimmed = line.trim();
-        !trimmed.starts_with("{{#") && !trimmed.starts_with("{{/") && !trimmed.starts_with("{{.")
-    }).collect::<Vec<_>>().join("\n")
+    content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.starts_with("{{#")
+                && !trimmed.starts_with("{{/")
+                && !trimmed.starts_with("{{.")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn append_pending_changelog(repo_root: &Path) -> Result<()> {
@@ -891,7 +1036,7 @@ fn append_pending_changelog(repo_root: &Path) -> Result<()> {
         serde_json::from_slice(&content)?
     } else {
         fs::create_dir_all(repo_root.join(SSMVER_DIR))?;
-        PendingSync {files: Vec::new()}
+        PendingSync { files: Vec::new() }
     };
     let changelog_path = PathBuf::from("CHANGELOG.md");
     if !pending.files.contains(&changelog_path) {
@@ -905,7 +1050,7 @@ fn chrono_free_date() -> String {
     let output = Command::new("date").arg("+%Y-%m-%d").output();
     match output {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
-        _                               => "YYYY-MM-DD".to_string(),
+        _ => "YYYY-MM-DD".to_string(),
     }
 }
 
@@ -915,9 +1060,15 @@ fn ensure_syncable_targets(targets: &[VersionTarget]) -> Result<()> {
         return Ok(());
     }
 
-    let mut lines = vec!["Refusing to sync because some supported files are dynamic or invalid:".to_string()];
+    let mut lines =
+        vec!["Refusing to sync because some supported files are dynamic or invalid:".to_string()];
     for target in blockers {
-        lines.push(format!("- {} ({:?}): {}", target.path.display(), target.target_kind, target.detail.as_deref().unwrap_or("unsupported target")));
+        lines.push(format!(
+            "- {} ({:?}): {}",
+            target.path.display(),
+            target.target_kind,
+            target.detail.as_deref().unwrap_or("unsupported target")
+        ));
     }
     bail!(lines.join("\n"))
 }
@@ -979,7 +1130,9 @@ fn write_executable(path: &Path, contents: &str) -> Result<()> {
     {
         use std::os::unix::fs::PermissionsExt;
 
-        let mut permissions = fs::metadata(path).with_context(|| format!("failed to read metadata for {}", path.display()))?.permissions();
+        let mut permissions = fs::metadata(path)
+            .with_context(|| format!("failed to read metadata for {}", path.display()))?
+            .permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions)
             .with_context(|| format!("failed to chmod {}", path.display()))?;

@@ -1,10 +1,15 @@
-use std::{env, fs, path::{Path, PathBuf}};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 
 const TEMPLATES_DIR: &str = "templates/changelog";
 
-const TEMPLATE_KEEPACHANGELOG: (&str, &str) = ("keepachangelog", r#"## [{{version}}] - {{date}}
+const TEMPLATE_KEEPACHANGELOG: (&str, &str) = (
+    "keepachangelog",
+    r#"## [{{version}}] - {{date}}
 
 ### Added
 {{#added}}
@@ -20,26 +25,39 @@ const TEMPLATE_KEEPACHANGELOG: (&str, &str) = ("keepachangelog", r#"## [{{versio
 {{#fixed}}
 - {{.}}
 {{/fixed}}
-"#);
+"#,
+);
 
-const TEMPLATE_CONVENTIONAL: (&str, &str) = ("conventional", r#"## {{version}} ({{date}})
+const TEMPLATE_CONVENTIONAL: (&str, &str) = (
+    "conventional",
+    r#"## {{version}} ({{date}})
 
 {{#commits}}
 * {{prefix}}: {{message}}
 {{/commits}}
-"#);
+"#,
+);
 
-const TEMPLATE_SIMPLE: (&str, &str) = ("simple", r#"## {{version}}
+const TEMPLATE_SIMPLE: (&str, &str) = (
+    "simple",
+    r#"## {{version}}
 
 {{#commits}}
 - {{message}}
 {{/commits}}
-"#);
+"#,
+);
 
-const DEFAULT_TEMPLATES: [(&str, &str); 3] = [TEMPLATE_KEEPACHANGELOG, TEMPLATE_CONVENTIONAL, TEMPLATE_SIMPLE];
+const DEFAULT_TEMPLATES: [(&str, &str); 3] = [
+    TEMPLATE_KEEPACHANGELOG,
+    TEMPLATE_CONVENTIONAL,
+    TEMPLATE_SIMPLE,
+];
 
 pub fn ssmver_home() -> Result<PathBuf> {
-    let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).context("could not determine home directory")?;
+    let home = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .context("could not determine home directory")?;
     Ok(PathBuf::from(home).join(".ssmver"))
 }
 
@@ -63,7 +81,8 @@ fn ensure_default_templates_at(base: &Path) -> Result<Vec<String>> {
     for (name, content) in &DEFAULT_TEMPLATES {
         let path = dir.join(name);
         if !path.exists() {
-            fs::write(&path, content).with_context(|| format!("failed to write template {}", path.display()))?;
+            fs::write(&path, content)
+                .with_context(|| format!("failed to write template {}", path.display()))?;
             created.push(name.to_string());
         }
     }
@@ -83,7 +102,8 @@ fn resolve_template_at(base: &Path, name: &str) -> Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
-    let content = fs::read_to_string(&path).with_context(|| format!("failed to read template {}", path.display()))?;
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read template {}", path.display()))?;
     Ok(Some(content))
 }
 
@@ -92,7 +112,9 @@ pub fn list_templates() -> Result<Vec<String>> {
 }
 
 pub fn render_template(template: &str, version: &str, date: &str) -> String {
-    template.replace("{{version}}", version).replace("{{date}}", date)
+    template
+        .replace("{{version}}", version)
+        .replace("{{date}}", date)
 }
 
 pub fn prepend_changelog_entry(repo_root: &Path, entry: &str) -> Result<bool> {
@@ -222,7 +244,11 @@ mod tests {
     #[test]
     fn prepend_changelog_entry_prepends_to_existing() {
         let temp = TempDir::new().unwrap();
-        fs::write(temp.path().join("CHANGELOG.md"), "## 0.9.0\n\n- Old entry\n").unwrap();
+        fs::write(
+            temp.path().join("CHANGELOG.md"),
+            "## 0.9.0\n\n- Old entry\n",
+        )
+        .unwrap();
         prepend_changelog_entry(temp.path(), "## 1.0.0\n\n- New entry\n").unwrap();
         let content = fs::read_to_string(temp.path().join("CHANGELOG.md")).unwrap();
         assert!(content.starts_with("## 1.0.0"));

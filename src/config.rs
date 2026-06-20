@@ -52,9 +52,9 @@ pub enum PromptMode {
 impl fmt::Display for PromptMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = match self {
-            Self::Never     => "never",
-            Self::Always    => "always",
-            Self::Ask       => "ask",
+            Self::Never => "never",
+            Self::Always => "always",
+            Self::Ask => "ask",
         };
         f.write_str(label)
     }
@@ -112,8 +112,8 @@ pub enum ChangelogEditor {
 impl fmt::Display for ChangelogEditor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = match self {
-            Self::Inline    => "inline",
-            Self::Editor    => "editor",
+            Self::Inline => "inline",
+            Self::Editor => "editor",
         };
         f.write_str(label)
     }
@@ -213,7 +213,8 @@ impl Default for SsmverConfig {
 
 impl SsmverConfig {
     pub fn load(path: &Path) -> Result<Self> {
-        let raw = fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+        let raw = fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
         Self::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
     }
 
@@ -230,22 +231,34 @@ impl SsmverConfig {
 
     pub fn get_config_value(&self, key: &str) -> Result<String> {
         match normalize_key(key) {
-            "version"               => Ok(self.version.to_string()),
-            "mode"                  => Ok(self.settings.mode.to_string()),
-            "prompt"                => Ok(self.settings.prompt.to_string()),
-            "prompt_prefixes"       => Ok(self.settings.prompt_prefixes.join(",")),
-            "sync.monorepo"         => Ok(self.sync.monorepo.to_string()),
-            "sync.constants"        => Ok(self.sync.constants.to_string()),
-            "sync.exclude"          => Ok(self.sync.exclude.join(",")),
-            "release.enabled"       => Ok(self.release.enabled.to_string()),
-            "release.on_bump"       => Ok(self.release.on_bump.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(",")),
-            "release.match"         => Ok(self.release.r#match.clone()),
-            "release.skip"          => Ok(self.release.skip.clone()),
-            "changelog.enabled"     => Ok(self.changelog.enabled.to_string()),
-            "changelog.on_bump"     => Ok(self.changelog.on_bump.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(",")),
-            "changelog.template"    => Ok(self.changelog.template.clone()),
-            "changelog.editor"      => Ok(self.changelog.editor.to_string()),
-            _                       => bail!("Unsupported config key: {key}"),
+            "version" => Ok(self.version.to_string()),
+            "mode" => Ok(self.settings.mode.to_string()),
+            "prompt" => Ok(self.settings.prompt.to_string()),
+            "prompt_prefixes" => Ok(self.settings.prompt_prefixes.join(",")),
+            "sync.monorepo" => Ok(self.sync.monorepo.to_string()),
+            "sync.constants" => Ok(self.sync.constants.to_string()),
+            "sync.exclude" => Ok(self.sync.exclude.join(",")),
+            "release.enabled" => Ok(self.release.enabled.to_string()),
+            "release.on_bump" => Ok(self
+                .release
+                .on_bump
+                .iter()
+                .map(|l| l.to_string())
+                .collect::<Vec<_>>()
+                .join(",")),
+            "release.match" => Ok(self.release.r#match.clone()),
+            "release.skip" => Ok(self.release.skip.clone()),
+            "changelog.enabled" => Ok(self.changelog.enabled.to_string()),
+            "changelog.on_bump" => Ok(self
+                .changelog
+                .on_bump
+                .iter()
+                .map(|l| l.to_string())
+                .collect::<Vec<_>>()
+                .join(",")),
+            "changelog.template" => Ok(self.changelog.template.clone()),
+            "changelog.editor" => Ok(self.changelog.editor.to_string()),
+            _ => bail!("Unsupported config key: {key}"),
         }
     }
 
@@ -280,7 +293,10 @@ impl SsmverConfig {
             }
             "sync.exclude" => {
                 self.sync.exclude = parse_string_list(raw_value);
-                Ok(format!("Set sync.exclude = {}", render_string_array(&self.sync.exclude)))
+                Ok(format!(
+                    "Set sync.exclude = {}",
+                    render_string_array(&self.sync.exclude)
+                ))
             }
             "release.enabled" => {
                 self.release.enabled = parse_bool(raw_value)?;
@@ -288,8 +304,16 @@ impl SsmverConfig {
             }
             "release.on_bump" => {
                 self.release.on_bump = parse_bump_level_list(raw_value)?;
-                let display = self.release.on_bump.iter().map(|l| l.to_string()).collect::<Vec<_>>();
-                Ok(format!("Set release.on_bump = {}", render_string_array(&display)))
+                let display = self
+                    .release
+                    .on_bump
+                    .iter()
+                    .map(|l| l.to_string())
+                    .collect::<Vec<_>>();
+                Ok(format!(
+                    "Set release.on_bump = {}",
+                    render_string_array(&display)
+                ))
             }
             "release.match" => {
                 self.release.r#match = raw_value.trim().to_string();
@@ -301,20 +325,37 @@ impl SsmverConfig {
             }
             "changelog.enabled" => {
                 self.changelog.enabled = parse_bool(raw_value)?;
-                Ok(format!("Set changelog.enabled = {}", self.changelog.enabled))
+                Ok(format!(
+                    "Set changelog.enabled = {}",
+                    self.changelog.enabled
+                ))
             }
             "changelog.on_bump" => {
                 self.changelog.on_bump = parse_bump_level_list(raw_value)?;
-                let display = self.changelog.on_bump.iter().map(|l| l.to_string()).collect::<Vec<_>>();
-                Ok(format!("Set changelog.on_bump = {}", render_string_array(&display)))
+                let display = self
+                    .changelog
+                    .on_bump
+                    .iter()
+                    .map(|l| l.to_string())
+                    .collect::<Vec<_>>();
+                Ok(format!(
+                    "Set changelog.on_bump = {}",
+                    render_string_array(&display)
+                ))
             }
             "changelog.template" => {
                 self.changelog.template = raw_value.trim().to_string();
-                Ok(format!("Set changelog.template = \"{}\"", self.changelog.template))
+                Ok(format!(
+                    "Set changelog.template = \"{}\"",
+                    self.changelog.template
+                ))
             }
             "changelog.editor" => {
                 self.changelog.editor = parse_changelog_editor(raw_value)?;
-                Ok(format!("Set changelog.editor = \"{}\"", self.changelog.editor))
+                Ok(format!(
+                    "Set changelog.editor = \"{}\"",
+                    self.changelog.editor
+                ))
             }
             _ => bail!("Unsupported config key: {key}"),
         }
@@ -344,69 +385,72 @@ pub fn compute_next_version(current: &Version, level: BumpLevel) -> Version {
 
 fn normalize_key(key: &str) -> &str {
     match key {
-        "settings.mode"             => "mode",
-        "settings.prompt"           => "prompt",
-        "settings.prompt_prefixes"  => "prompt_prefixes",
-        "sync.monorepo"             => "sync.monorepo",
-        "sync.constants"            => "sync.constants",
-        "sync.exclude"              => "sync.exclude",
-        "monorepo"                  => "sync.monorepo",
-        "constants"                 => "sync.constants",
-        "exclude"                   => "sync.exclude",
-        "enabled"                   => "release.enabled",
-        "on_bump"                   => "release.on_bump",
-        "release.match"             => "release.match",
-        "release.skip"              => "release.skip",
-        "release.enabled"           => "release.enabled",
-        "release.on_bump"           => "release.on_bump",
-        "changelog.enabled"         => "changelog.enabled",
-        "changelog.on_bump"         => "changelog.on_bump",
-        "changelog.template"        => "changelog.template",
-        "changelog.editor"          => "changelog.editor",
-        other                       => other,
+        "settings.mode" => "mode",
+        "settings.prompt" => "prompt",
+        "settings.prompt_prefixes" => "prompt_prefixes",
+        "sync.monorepo" => "sync.monorepo",
+        "sync.constants" => "sync.constants",
+        "sync.exclude" => "sync.exclude",
+        "monorepo" => "sync.monorepo",
+        "constants" => "sync.constants",
+        "exclude" => "sync.exclude",
+        "enabled" => "release.enabled",
+        "on_bump" => "release.on_bump",
+        "release.match" => "release.match",
+        "release.skip" => "release.skip",
+        "release.enabled" => "release.enabled",
+        "release.on_bump" => "release.on_bump",
+        "changelog.enabled" => "changelog.enabled",
+        "changelog.on_bump" => "changelog.on_bump",
+        "changelog.template" => "changelog.template",
+        "changelog.editor" => "changelog.editor",
+        other => other,
     }
 }
 
 fn parse_mode(value: &str) -> Result<Mode> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "all"       => Ok(Mode::All),
-        "branch"    => Ok(Mode::Branch),
-        _           => bail!("mode must be one of: all, branch"),
+        "all" => Ok(Mode::All),
+        "branch" => Ok(Mode::Branch),
+        _ => bail!("mode must be one of: all, branch"),
     }
 }
 
 fn parse_prompt_mode(value: &str) -> Result<PromptMode> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "never"     => Ok(PromptMode::Never),
-        "always"    => Ok(PromptMode::Always),
-        "ask"       => Ok(PromptMode::Ask),
-        _           => bail!("prompt must be one of: never, always, ask"),
+        "never" => Ok(PromptMode::Never),
+        "always" => Ok(PromptMode::Always),
+        "ask" => Ok(PromptMode::Ask),
+        _ => bail!("prompt must be one of: never, always, ask"),
     }
 }
 
 fn parse_monorepo_mode(value: &str) -> Result<MonorepoMode> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "lockstep"  => Ok(MonorepoMode::Lockstep),
-        _           => bail!("sync.monorepo must be: lockstep"),
+        "lockstep" => Ok(MonorepoMode::Lockstep),
+        _ => bail!("sync.monorepo must be: lockstep"),
     }
 }
 
 fn parse_bool(value: &str) -> Result<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "true"  | "1" | "yes"   => Ok(true),
-        "false" | "0" | "no"    => Ok(false),
-        _                       => bail!("value must be true or false"),
+        "true" | "1" | "yes" => Ok(true),
+        "false" | "0" | "no" => Ok(false),
+        _ => bail!("value must be true or false"),
     }
 }
 
 fn parse_bump_level_list(value: &str) -> Result<Vec<BumpLevel>> {
     let items = parse_string_list(value);
-    items.iter().map(|item| match item.trim().to_ascii_lowercase().as_str() {
-        "patch"     => Ok(BumpLevel::Patch),
-        "minor"     => Ok(BumpLevel::Minor),
-        "major"     => Ok(BumpLevel::Major),
-        other => bail!("unknown bump level: {other} (expected patch, minor, or major)"),
-    }).collect()
+    items
+        .iter()
+        .map(|item| match item.trim().to_ascii_lowercase().as_str() {
+            "patch" => Ok(BumpLevel::Patch),
+            "minor" => Ok(BumpLevel::Minor),
+            "major" => Ok(BumpLevel::Major),
+            other => bail!("unknown bump level: {other} (expected patch, minor, or major)"),
+        })
+        .collect()
 }
 
 fn parse_constants_mode(value: &str) -> Result<ConstantsMode> {
@@ -509,9 +553,9 @@ fn default_changelog_editor() -> ChangelogEditor {
 
 fn parse_changelog_editor(value: &str) -> Result<ChangelogEditor> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "inline"    => Ok(ChangelogEditor::Inline),
-        "editor"    => Ok(ChangelogEditor::Editor),
-        _           => bail!("changelog.editor must be one of: inline, editor"),
+        "inline" => Ok(ChangelogEditor::Inline),
+        "editor" => Ok(ChangelogEditor::Editor),
+        _ => bail!("changelog.editor must be one of: inline, editor"),
     }
 }
 
@@ -530,15 +574,30 @@ mod tests {
     #[test]
     fn version_bumps_reset_lower_segments_and_metadata() {
         let version = Version::parse("1.2.3-beta.4+sha").unwrap();
-        assert_eq!(compute_next_version(&version, BumpLevel::Patch).to_string(), "1.2.4");
-        assert_eq!(compute_next_version(&version, BumpLevel::Minor).to_string(), "1.3.0");
-        assert_eq!(compute_next_version(&version, BumpLevel::Major).to_string(), "2.0.0");
+        assert_eq!(
+            compute_next_version(&version, BumpLevel::Patch).to_string(),
+            "1.2.4"
+        );
+        assert_eq!(
+            compute_next_version(&version, BumpLevel::Minor).to_string(),
+            "1.3.0"
+        );
+        assert_eq!(
+            compute_next_version(&version, BumpLevel::Major).to_string(),
+            "2.0.0"
+        );
     }
 
     #[test]
     fn string_lists_accept_csv_or_array_shapes() {
-        assert_eq!(parse_string_list("feature, release"), vec!["feature".to_string(), "release".to_string()]);
-        assert_eq!(parse_string_list("[\"feature\", \"release\"]"), vec!["feature".to_string(), "release".to_string()]);
+        assert_eq!(
+            parse_string_list("feature, release"),
+            vec!["feature".to_string(), "release".to_string()]
+        );
+        assert_eq!(
+            parse_string_list("[\"feature\", \"release\"]"),
+            vec!["feature".to_string(), "release".to_string()]
+        );
     }
 
     #[test]
@@ -569,7 +628,10 @@ mod tests {
         let raw = toml::to_string_pretty(&config).unwrap();
         let parsed: SsmverConfig = toml::from_str(&raw).unwrap();
         assert!(parsed.changelog.enabled);
-        assert_eq!(parsed.changelog.on_bump, vec![BumpLevel::Minor, BumpLevel::Major]);
+        assert_eq!(
+            parsed.changelog.on_bump,
+            vec![BumpLevel::Minor, BumpLevel::Major]
+        );
         assert_eq!(parsed.changelog.template, "keepachangelog");
         assert_eq!(parsed.changelog.editor, ChangelogEditor::Inline);
     }
