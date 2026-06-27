@@ -1,0 +1,2 @@
+- tauri projects version bump
+- has a command to update installed hooks?

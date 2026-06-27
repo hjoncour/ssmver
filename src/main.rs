@@ -542,7 +542,8 @@ fn handle_hook_prepare_commit_msg(message_file: &Path, source: Option<&str>) -> 
     };
 
     let version_bumped = if let Some(next_version) = compute_commit_bump_version(&repo_root, &config, level)? {
-        sync_project_version(&repo_root, &config_path, &mut config, next_version, true)?;
+        let changed_files = sync_project_version(&repo_root, &config_path, &mut config, next_version, true)?;
+        stage_files(&repo_root, &changed_files)?;
         true
     } else {
         false
@@ -564,6 +565,13 @@ fn handle_hook_prepare_commit_msg(message_file: &Path, source: Option<&str>) -> 
     Ok(())
 }
 
+fn stage_files(repo_root: &Path, files: &[PathBuf]) -> Result<()> {
+    for file in files {
+        run_git(&repo_root, ["add".to_string(), "--".to_string(), file.to_string_lossy().into_owned()])?;
+    }
+    Ok(())
+}
+
 fn handle_hook_post_commit() -> Result<()> {
     if env::var("SSMVER_AMENDING").ok().as_deref() == Some("1") {
         return Ok(());
@@ -582,9 +590,7 @@ fn handle_hook_post_commit() -> Result<()> {
         return Ok(());
     }
 
-    for file in &pending.files {
-        run_git(&repo_root, ["add".to_string(), "--".to_string(), file.to_string_lossy().into_owned()])?;
-    }
+    stage_files(&repo_root, &pending.files)?;
 
     if !has_cached_changes_for_paths(&repo_root, &pending.files)? {
         clear_pending_sync(&repo_root)?;

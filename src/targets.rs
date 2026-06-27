@@ -59,6 +59,7 @@ const SKIP_DIRS: &[&str] = &[".git", ".ssmver", ".gradle", "node_modules", "targ
 pub enum Ecosystem {
     Cargo,
     Node,
+    Tauri,
     Maven,
     Gradle,
     Python,
@@ -73,6 +74,7 @@ impl fmt::Display for Ecosystem {
         match self {
             Self::Cargo  => f.write_str("Cargo"),
             Self::Node   => f.write_str("Node"),
+            Self::Tauri  => f.write_str("Tauri"),
             Self::Maven  => f.write_str("Maven"),
             Self::Gradle => f.write_str("Gradle"),
             Self::Python => f.write_str("Python"),
@@ -88,8 +90,10 @@ impl fmt::Display for Ecosystem {
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
     CargoToml,
+    CargoLock,
     PackageJson,
     NpmLockfile,
+    TauriConfigJson,
     MavenPom,
     GradleProperties,
     GradleBuildScript,
@@ -197,11 +201,15 @@ pub fn apply_version_to_targets(repo_root: &Path, targets: &[VersionTarget], new
 
         let did_change = match target.target_kind {
             TargetKind::CargoToml => update_cargo_toml(&repo_root.join(&target.path), new_version)?,
+            TargetKind::CargoLock => update_cargo_lock(&repo_root.join(&target.path), new_version)?,
             TargetKind::PackageJson => {
                 update_package_json(&repo_root.join(&target.path), new_version)?
             }
             TargetKind::NpmLockfile => {
                 update_npm_lockfile(repo_root, &target.path, targets, new_version)?
+            }
+            TargetKind::TauriConfigJson => {
+                update_tauri_config_json(&repo_root.join(&target.path), new_version)?
             }
             TargetKind::MavenPom => update_maven_pom(repo_root, &target.path, new_version)?,
             TargetKind::GradleProperties => {
@@ -296,8 +304,10 @@ fn detect_targets_for_file(repo_root: &Path, relative_path: &Path, excluded: boo
     let file_name = relative_path.file_name().and_then(OsStr::to_str).unwrap_or_default();
     let targets = match file_name {
         "Cargo.toml"                                    => detect_cargo_toml(repo_root, relative_path)?,
+        "Cargo.lock"                                    => detect_cargo_lock(repo_root, relative_path)?,
         "package.json"                                  => detect_package_json(repo_root, relative_path)?,
         "package-lock.json" | "npm-shrinkwrap.json"     => detect_npm_lockfile(repo_root, relative_path)?,
+        "tauri.conf.json"                               => detect_tauri_config_json(repo_root, relative_path)?,
         "pom.xml"                                       => detect_maven_pom(repo_root, relative_path)?,
         "gradle.properties"                             => detect_gradle_properties(repo_root, relative_path)?,
         "build.gradle" | "build.gradle.kts"             => detect_gradle_build_script(repo_root, relative_path)?,
@@ -357,6 +367,31 @@ fn detect_cargo_toml(repo_root: &Path, relative_path: &Path) -> Result<Vec<Versi
     Ok(vec![parsed])
 }
 
+fn detect_cargo_lock(repo_root: &Path, relative_path: &Path) -> Result<Vec<VersionTarget>> {
+    let path = repo_root.join(relative_path);
+    let content = fs::read_to_string(&path)?;
+    let doc = parse_toml_document(&content, relative_path)?;
+    let versions = cargo_lock_local_package_versions(&doc);
+
+    if versions.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(vec![parse_consistent_versions(Ecosystem::Cargo, relative_path, TargetKind::CargoLock, TargetAuthority::Mirror, &versions)?])
+}
+
+fn cargo_lock_local_package_versions(doc: &DocumentMut) -> Vec<String> {
+    let Some(packages) = doc["package"].as_array_of_tables() else {
+        return Vec::new();
+    };
+
+    packages
+        .iter()
+        .filter(|package| package.get("source").is_none())
+        .filter_map(|package| item_string(package.get("version")))
+        .collect()
+}
+
 fn detect_package_json(repo_root: &Path, relative_path: &Path) -> Result<Vec<VersionTarget>> {
     let path = repo_root.join(relative_path);
     let content = fs::read_to_string(&path)?;
@@ -394,6 +429,18 @@ fn detect_npm_lockfile(repo_root: &Path, relative_path: &Path) -> Result<Vec<Ver
         .collect::<Vec<_>>();
 
     Ok(vec![parse_consistent_versions(Ecosystem::Node, relative_path, TargetKind::NpmLockfile, TargetAuthority::Mirror, &versions)?])
+}
+
+fn detect_tauri_config_json(repo_root: &Path, relative_path: &Path) -> Result<Vec<VersionTarget>> {
+    let path = repo_root.join(relative_path);
+    let content = fs::read_to_string(&path)?;
+    let json: JsonValue = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse {}", relative_path.display()))?;
+    let Some(version) = json.get("version").and_then(JsonValue::as_str) else {
+        return Ok(Vec::new());
+    };
+
+    Ok(vec![VersionTarget::managed(Ecosystem::Tauri, relative_path, TargetKind::TauriConfigJson, TargetAuthority::Literal, parse_version(Ecosystem::Tauri, relative_path, TargetKind::TauriConfigJson, TargetAuthority::Literal, version)?)])
 }
 
 fn detect_maven_pom(repo_root: &Path, relative_path: &Path) -> Result<Vec<VersionTarget>> {
@@ -741,6 +788,36 @@ fn update_cargo_toml(path: &Path, new_version: &Version) -> Result<bool> {
     Ok(true)
 }
 
+fn update_cargo_lock(path: &Path, new_version: &Version) -> Result<bool> {
+    let content = fs::read_to_string(path)?;
+    let mut doc = parse_toml_document(&content, path)?;
+    let version_string = new_version.to_string();
+    let mut changed = false;
+
+    if let Some(packages) = doc["package"].as_array_of_tables_mut() {
+        for package in packages.iter_mut() {
+            if package.get("source").is_some() {
+                continue;
+            }
+            if item_string(package.get("version")).is_some() {
+                package["version"] = value(version_string.clone());
+                changed = true;
+            }
+        }
+    }
+
+    if !changed {
+        return Ok(false);
+    }
+
+    let updated = doc.to_string();
+    if updated == content {
+        return Ok(false);
+    }
+    fs::write(path, updated)?;
+    Ok(true)
+}
+
 fn update_package_json(path: &Path, new_version: &Version) -> Result<bool> {
     update_json_version_field(path, new_version, |json| json.get("version").is_some())
 }
@@ -791,6 +868,10 @@ fn update_npm_lockfile(repo_root: &Path, relative_path: &Path, all_targets: &[Ve
     }
     fs::write(path, updated)?;
     Ok(true)
+}
+
+fn update_tauri_config_json(path: &Path, new_version: &Version) -> Result<bool> {
+    update_json_version_field(path, new_version, |json| json.get("version").is_some())
 }
 
 fn update_maven_pom(repo_root: &Path, relative_path: &Path, new_version: &Version) -> Result<bool> {
