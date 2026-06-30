@@ -16,6 +16,7 @@ Current support includes:
 
 - Rust / Cargo: `Cargo.toml`, including workspace package versions
 - Node / JS / TS: `package.json`, `package-lock.json`, `npm-shrinkwrap.json`
+- Tauri: `tauri.conf.json` app versions
 - Maven: `pom.xml` project version and local parent version references
 - Gradle: `gradle.properties`, simple literal `build.gradle` / `build.gradle.kts` version assignments
 - Python: `pyproject.toml`, `setup.cfg`, simple `setup.py`, curated `__version__` constants
